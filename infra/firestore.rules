@@ -1,0 +1,79 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAuthenticated() { return request.auth != null; }
+    function role() { return isAuthenticated() ? (request.auth.token.role ?? "") : ""; }
+    function isAdmin() { return role() == "admin"; }
+    function isClinician() { return role() == "clinician" || isAdmin(); }
+    function isPatient() { return role() == "patient"; }
+    function practiceClaim() { return isAuthenticated() ? (request.auth.token.practice_id ?? "") : ""; }
+    function clientClaim() { return isAuthenticated() ? (request.auth.token.client_id ?? "") : ""; }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Root under practices/{practiceId}
+    match /practices/{practiceId} {
+      // Clients: minimal PHI; clinicians/admins in-practice; patient reads own
+      match /clients/{clientId} {
+        allow read: if (isClinician() && practiceId == practiceClaim())
+                     || (isPatient() && practiceId == practiceClaim() && clientId == clientClaim());
+        allow create, update: if isClinician() && practiceId == practiceClaim();
+        allow delete: if false;
+      }
+
+      // Intakes: clinicians/admins full R/W; patients can read/update their own intake by client_id
+      match /intakes/{intakeId} {
+        allow read: if isClinician() && practiceId == practiceClaim();
+        allow create, update: if isClinician() && practiceId == practiceClaim();
+
+        // Patient access limited to their client_id within the same practice
+        allow read, update: if isPatient()
+                            && practiceId == practiceClaim()
+                            && (resource.data.client_id == clientClaim() || request.resource.data.client_id == clientClaim());
+        allow delete: if false;
+      }
+
+      // Provider Docs: clinicians/admins within practice; versions are write-once
+      match /provider_docs/{docId} {
+        allow read: if isClinician() && practiceId == practiceClaim();
+        allow create, update: if isClinician() && practiceId == practiceClaim();
+        allow delete: if false;
+
+        match /versions/{versionId} {
+          allow read: if isClinician() && practiceId == practiceClaim();
+          allow create: if isClinician()
+                        && practiceId == practiceClaim()
+                        && !exists(/databases/$(database)/documents/practices/$(practiceId)/provider_docs/$(docId)/versions/$(versionId));
+          allow update, delete: if false;
+        }
+      }
+
+      // Assignments
+      match /assignments/{assignmentId} {
+        allow read: if isClinician() && practiceId == practiceClaim();
+        allow create, update: if isClinician() && practiceId == practiceClaim();
+        allow delete: if false;
+      }
+
+      // Sessions (summaries)
+      match /sessions/{sessionId} {
+        allow read: if isClinician() && practiceId == practiceClaim();
+        allow create: if isClinician() && practiceId == practiceClaim();
+        allow update, delete: if false;
+      }
+
+      // Optional: Bundles if stored in Firestore under practice
+      match /bundles/{bundleId} {
+        allow read: if isClinician() && practiceId == practiceClaim();
+        allow create: if isClinician() && practiceId == practiceClaim();
+        allow update, delete: if false;
+      }
+    }
+  }
+}
+
+
