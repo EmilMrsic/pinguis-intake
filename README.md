@@ -20,19 +20,20 @@ NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=564479101531
 NEXT_PUBLIC_FIREBASE_APP_ID=1:564479101531:web:dd7bc359eda74158a84d7e
 ```
 
-2) Local admin creds (Firestore writes from server actions)
+2) Local admin creds (Firestore writes from API routes)
 
-- Preferred: Service account file (not committed) and export the path:
+- Preferred: Application Default Credentials (ADC). Either use a service account file and export the path:
 ```
 export GOOGLE_APPLICATION_CREDENTIALS="/absolute/path/to/service-account.json"
 ```
 - Or use gcloud ADC: `gcloud auth application-default login`
 
-3) OpenAI
+3) OpenAI (optional; can be disabled)
 
 ```
 export OPENAI_API_KEY=sk-...
 ```
+To disable AI suggestions entirely in the UI, set `NEXT_PUBLIC_DISABLE_AI=1`.
 
 4) Install + dev
 
@@ -43,8 +44,15 @@ npm run dev
 
 ## Project structure (high-level)
 
-- `app/intake/Flow.tsx` – single-file renderer for steps: Reason → Areas → ...
-- `app/api/model-hook/route.ts` – minimal OpenAI chat endpoint
+- `app/intake/Flow.tsx` – thin conductor for steps (hooks + atoms)
+- `app/intake/steps/*` – step components (Reason, Contact, Areas, TopicRate, DeepDive, stubs)
+- `components/intake/*` – UI atoms (Glow, GlowButton, FooterNav, TopicNoteField, StepHeader)
+- `lib/intake/*` – core (topics, deep items, guidance, paths, id, helpers, hooks, intakeApi)
+- `app/api/model-hook/route.ts` – minimal OpenAI chat endpoint (UI will no-op if disabled)
+- `app/api/intake-load/route.ts` – loads the latest (prefer incomplete) intake by email/clientId
+- `app/api/intake-save/route.ts` – idempotent intake write endpoint (merge semantics)
+- `app/api/upload-profile/route.ts` – uploads profile photo to GCS folder
+- `app/api/generate-abstract-avatar/route.ts` – creates and stores a gradient SVG avatar
 - `infra/` – Firestore rules/indexes
 
 ## Firestore layout
@@ -57,10 +65,31 @@ npm run dev
 
 ## Notes
 
-- Autosave uses debounced server action; full AJV validation is deferred to submit.
+- Autosave uses a lightweight API route (`/api/intake-save`); full AJV validation is deferred to submit.
 - Reason step persists both `story.reason_choice` and `story.flow_variant`.
 - Areas step persists `areas.selected`, `areas.severity`, and enqueues `queues.deepDive` for items ≥3.
+- Contact step persists `profile.{first_name,last_name,email,phone,birthdate,photo_url}` and generates a stable human-ish `intakeId` if missing (initials + 6 digits).
+- Topic notes use a debounced background save (~1s idle), save on blur, and commit on Next. Typing is fully local to preserve focus; latest text is always persisted on Next.
+- Deep-dive sliders glide smoothly (0.1 UI step) and persist rounded 0–10 on release. If value > 6, an optional "why" input appears and saves on blur/Enter.
+
+## Release notes (2025-xx-xx)
+
+- Simplified TopicRate UX: one-line guidance + ≤3 chips, compact textarea (auto-expands), Enter-to-advance.
+- Fixed input focus issues by moving note state local and debouncing autosave.
+- Implemented DeepDive with smooth sliders and optional per-item "why" notes.
+- Added modular structure: hooks, steps, and UI atoms; Flow is now a thin conductor.
 
 ## Safety
 
 Secrets are ignored by git via `.gitignore` (e.g., `.env*`, `service-account.json`). Do not commit secrets.
+
+## Git workflow
+
+```
+git checkout -b feat/intake-smoothing
+git add -A
+git commit -m "Intake: smooth typing; background saves; stable intakeId; AI guard"
+git push origin feat/intake-smoothing
+```
+
+Then open a PR to `main`.

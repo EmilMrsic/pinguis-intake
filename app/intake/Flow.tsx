@@ -1,101 +1,184 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
+import { Input } from '@/components/ui/input';
+import { Glow } from '@/components/intake/Glow';
+import { GlowButton } from '@/components/intake/GlowButton';
+import { ReasonStep } from '@/app/intake/steps/ReasonStep';
+import { ContactStep } from '@/app/intake/steps/ContactStep';
+import { AreasSelectStep } from '@/app/intake/steps/AreasSelectStep';
+import { TopicRateStep } from '@/app/intake/steps/TopicRateStep';
+import { DeepDiveStep } from '@/app/intake/steps/DeepDiveStep';
+import { TopicNoteField } from '@/app/intake/steps/TopicNoteField';
+import { FooterNav } from '@/components/intake/FooterNav';
+import { StepHeader } from '@/components/intake/StepHeader';
 import { saveIntakeAction } from './actions';
+import { firebaseClient } from '@/lib/firebaseClient';
+import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import { FLOW_VARIANT } from '@/lib/intake/config';
 import { devPracticeId, devClientId } from '@/lib/devIds';
-import { systemPrompt } from '@/lib/ai/systemPrompt';
+import { jumpToNextRelevantIndex, markIntakeComplete } from '@/lib/intake/helpers';
+import React from 'react';
+import { topics as topicsCatalog } from '@/lib/intake/topics';
+import { DEEP_ITEMS as DEEP_ITEMS_CONST } from '@/lib/intake/deepItems';
+import { getGuidance as getGuidanceLib } from '@/lib/intake/guidance';
+import { setByPath as setByPathLib, getByPath as getByPathLib } from '@/lib/intake/paths';
+ 
 
 export type Step = {
   id: string;
   title: string;
   description?: string;
-  type: 'slider' | 'text' | 'singleSelect' | 'areas';
+  type: 'singleSelect' | 'contact' | 'areas_select' | 'topic_rate' | 'slider' | 'text' | 'deep_dive' | 'daily' | 'sleep_short' | 'cec' | 'metabolic' | 'isi' | 'review';
   field: string; // dot path in payload
   scale?: '0-10'|'1-5'|'minutes';
+  meta?: Record<string, any>;
 };
 
 const baseSteps: Step[] = [
-  {
-    id: 'reason',
-    title: 'What brings you here today?',
-    description: 'This helps us tailor the questions.',
-    type: 'singleSelect',
-    field: 'story.reason_choice'
-  },
-  {
-    id: 'areas',
-    title: 'What would you like to focus on?',
-    description: 'Pick one or more, then give each a quick 1–5.',
-    type: 'areas',
-    field: 'areas'
-  },
-  { id: 'stress', title: 'Stress/Anxiety', description: '0–10, higher is worse', type: 'slider', field: 'areas.stress', scale: '0-10' },
-  { id: 'sleep_latency', title: 'Sleep latency (minutes)', description: 'How long to fall asleep', type: 'slider', field: 'sleep.latency_minutes', scale: 'minutes' },
+  { id:'reason', title:"Let's start simple — what's your focus?", description:"We'll tailor what comes next to match your choice.", type:'singleSelect', field:'story.reason_choice' },
+  { id:'contact', title:'Quick contact details', description:'This helps us keep you updated about scheduling.', type:'contact', field:'profile' },
+  { id:'areas_select', title:'What would you like to focus on?', description:'Pick one or more.', type:'areas_select', field:'areas' },
 ];
 
-function setByPath(obj: any, path: string, value: any) {
-  const parts = path.split('.');
-  let cur = obj;
-  for (let i = 0; i < parts.length - 1; i++) {
-    if (typeof cur[parts[i]] !== 'object' || cur[parts[i]] === null) cur[parts[i]] = {};
-    cur = cur[parts[i]];
-  }
-  cur[parts[parts.length - 1]] = value;
-}
+const setByPath = setByPathLib;
+const getByPath = getByPathLib;
 
-function getByPath(obj: any, path: string) {
-  return path.split('.').reduce((acc, k) => (acc && typeof acc === 'object') ? acc[k] : undefined, obj);
-}
+const getGuidance = getGuidanceLib;
 
 export default function Flow() {
   const [payload, setPayload] = useState<Record<string, any>>({});
   const [stepIdx, setStepIdx] = useState(0);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<string>('');
-  const steps = useMemo(() => {
-    if (FLOW_VARIANT === 'peak') {
-      // Reason → Areas (keep it short in peak)
-      return [baseSteps[0], baseSteps[1]];
-    }
-    return baseSteps;
-  }, []);
+  const [loadingIntake, setLoadingIntake] = useState<boolean>(true);
 
-  // Fetch first natural question on mount
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch('/api/model-hook', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ context: { flow_variant: FLOW_VARIANT, remaining_fields: [{ id: 'story.reason_choice' }] } })
-        });
-        const data = await res.json();
-        if (data?.question) {
-          // only used for future UI hints; keeping minimal for now
-          console.log('AI question:', data.question);
-        }
-      } catch {}
-    })();
-  }, []);
+  const dbg = useCallback((..._args: any[]) => {}, []);
+
+  // Topics catalog
+  const topics: { id: string; label: string }[] = topicsCatalog;
+
+  const DEEP_ITEMS: Record<string, { key:string; label:string }[]> = DEEP_ITEMS_CONST;
+
+  const topicPromptFallback: Record<string, string> = {};
+
+  // Dynamic steps based on selected topics
+  const selected = payload.areas?.selected ?? [];
+  const topicSteps: Step[] = useMemo(() => selected.map((topicId: string) => ({
+    id: `topic_${topicId}`,
+    title: `Rate: ${topics.find(t=>t.id===topicId)?.label ?? topicId}`,
+    description: '1 = mild · 5 = severe',
+    type: 'topic_rate',
+    field: 'areas',
+    meta: { topicId }
+  })), [selected]);
+  const steps: Step[] = useMemo<Step[]>(() => [
+    baseSteps[0],
+    baseSteps[1],
+    baseSteps[2],
+    ...topicSteps,
+    { id:'deep_dive', title:'Quick zoom-in', description:'0 = not at all · 10 = severe', type:'deep_dive', field:'deepdive' },
+    { id:'daily',       title:'Daily habits & health', type:'daily', field:'daily' },
+    { id:'sleep_short', title:'Sleep (short form)', type:'sleep_short', field:'sleep' },
+    { id:'cec',         title:'CEC questionnaire', type:'cec', field:'cec' },
+    { id:'metabolic',   title:'Metabolic', type:'metabolic', field:'metabolic' },
+    { id:'isi',         title:'Insomnia Severity Index (18+)', type:'isi', field:'isi' },
+    { id:'review',      title:'Review & submit', type:'review', field:'review' },
+  ], [selected]);
 
   const current = steps[stepIdx];
+  // On mount, attempt to load existing intake tied to current auth email
+  useEffect(() => {
+    let unsub: any;
+    const app = firebaseClient();
+    const auth = getAuth(app);
+    unsub = onAuthStateChanged(auth, async (u) => {
+      try {
+        const email = u?.email || payload?.profile?.email || '';
+        if (!email && !payload?.intakeId) { setLoadingIntake(false); return; } // nothing to query
+        const res = await fetch('/api/intake-load', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ practiceId: devPracticeId, intakeId: payload?.intakeId, email, clientId: devClientId })
+        });
+        if (!res.ok) { setLoadingIntake(false); return; }
+        const data = await res.json();
+        if (data?.payload) {
+          setPayload((prev) => {
+            if (hydratedRef.current) return prev;
+            const merged = { ...data.payload, ...prev } as any; // prefer loaded values
+            if (email && !merged?.profile?.email) {
+              merged.profile = { ...(merged.profile||{}), email };
+            }
+            if (data.intakeId) merged.intakeId = data.intakeId;
+            hydratedRef.current = true;
+            return merged;
+          });
+        } else if (email) {
+          // Seed email so first save links this user
+          setPayload((prev)=> ({ ...prev, profile: { ...(prev.profile||{}), email } }));
+        }
+      } catch {}
+      finally { setLoadingIntake(false); }
+    });
+    return () => { try { unsub && unsub(); } catch {} };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const intakeId = payload?.intakeId ?? `${devPracticeId}:${devClientId}`;
+  const aiNotesTimerRef = useRef<Record<string, any>>({});
+  const isTypingRef = useRef<boolean>(false);
+  const typingResetTimer = useRef<any>(null);
+  const hydratedRef = useRef<boolean>(false);
+  const payloadRef = useRef<Record<string, any>>({});
+  useEffect(() => { payloadRef.current = payload; }, [payload]);
 
   // autosave on payload change (debounced)
   const timer = useRef<NodeJS.Timeout | null>(null);
-  const autosave = useCallback((next: Record<string, any>) => {
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(async () => {
+  const lastOptsRef = useRef<{ silent?: boolean }>({});
+  function generateIntakeIdFrom(next: any): string {
+    const fi = (next?.profile?.first_name || '').trim().charAt(0).toLowerCase() || 'x';
+    const li = (next?.profile?.last_name || '').trim().charAt(0).toLowerCase() || 'x';
+    const rand = Math.floor(100000 + Math.random()*900000).toString();
+    return `${fi}${li}${rand}`;
+  }
+  const autosave = useCallback((next: Record<string, any>, opts?: { silent?: boolean; immediate?: boolean }) => {
+    const doSave = async (snapshotIn: Record<string, any>) => {
+      // allow save even during hydration if user interacts; we only guard if nothing is loaded and no edits
+      const snapshot = { ...(snapshotIn as any) } as any;
+      if (!snapshot.intakeId) {
+        snapshot.intakeId = generateIntakeIdFrom(snapshot);
+        setPayload((prev) => prev?.intakeId ? prev : ({ ...prev, intakeId: snapshot.intakeId }));
+      }
       setSaving(true);
       try {
-        await saveIntakeAction({ practiceId: devPracticeId, clientId: devClientId, payload: next });
-        setToast('Saved ✓');
-        setTimeout(()=>setToast(''), 1200);
+        const res = await fetch('/api/intake-save', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ practiceId: devPracticeId, clientId: devClientId, intakeId: snapshot?.intakeId, payload: snapshot })
+        });
+        if (!res.ok) {
+          console.error('intake-save failed', await res.text());
+        }
+        if (res.ok && !(opts?.silent)) {
+          setToast('Saved ✓');
+          setTimeout(()=>setToast(''), 1200);
+        }
       } finally {
         setSaving(false);
       }
-    }, 500);
+    };
+
+    if (opts?.immediate) {
+      if (timer.current) clearTimeout(timer.current);
+      void doSave(next);
+      return;
+    }
+
+    if (timer.current) clearTimeout(timer.current);
+    lastOptsRef.current = opts || {};
+    const snapshot = { ...next } as any;
+    timer.current = setTimeout(() => { void doSave(snapshot); }, 900);
   }, []);
 
   function updateField(path: string, value: any) {
@@ -103,67 +186,119 @@ export default function Flow() {
     setByPath(next, path, value);
     setPayload(next);
     autosave(next);
+    dbg('updateField', { path, value });
+  }
+
+  function setDeepDive(topicId: string, itemKey: string, val: number) {
+    const next = structuredClone(payload);
+    setByPath(next, `deepdive.${topicId}.${itemKey}`, val);
+    const field = `deepdive.${topicId}.${itemKey}`;
+    const entry = { field, topic: topicId, value: val } as any;
+    const existing = Array.isArray(next.tracker?.candidates) ? next.tracker.candidates : [];
+    const map = new Map(existing.map((r: any) => [r.field, r]));
+    if (val >= 6) map.set(field, entry); else map.delete(field);
+    next.tracker = { ...(next.tracker||{}), candidates: Array.from(map.values()) };
+    setPayload(next);
+    autosave(next);
+    dbg('deepDive:set', { topicId, itemKey, val });
+    // optional AI notify
+    // aiTurn disabled
   }
 
   function nextStep() { if (stepIdx < steps.length - 1) setStepIdx(stepIdx + 1); }
   function prevStep() { if (stepIdx > 0) setStepIdx(stepIdx - 1); }
 
-  // Glowing gradient wrappers (Tailwind v3) inspired by Braydon Coyer's technique
-  function Glow({
-    children,
-    radius = 'rounded-xl',
-    from = 'from-sky-500',
-    to = 'to-blue-600',
-  }: { children: React.ReactNode; radius?: string; from?: string; to?: string }) {
-    return (
-      <div className={`relative ${radius}`}>
-        <div className={`pointer-events-none absolute -inset-1 ${radius} bg-gradient-to-r ${from} ${to} opacity-35 blur`} />
-        {children}
-      </div>
-    );
+  // Mark complete helper (call on final submit later)
+  async function markComplete() {
+    try { await markIntakeComplete({ practiceId: devPracticeId, clientId: devClientId, intakeId: payload?.intakeId, payload }); } catch {}
   }
 
-  function GlowButton({
-    children,
-    onClick,
-    disabled,
-    variant = 'default' as const,
-  }: { children: React.ReactNode; onClick?: () => void; disabled?: boolean; variant?: 'default'|'outline'|'secondary'|'ghost'|'link'|'destructive' }) {
-    return (
-      <div className="relative inline-flex">
-        <div className="pointer-events-none absolute -inset-0.5 rounded-md bg-gradient-to-r from-sky-500 to-blue-600 opacity-40 blur-sm" />
-        <Button variant={variant} onClick={onClick} disabled={disabled} className="relative">{children}</Button>
-      </div>
-    );
+  // using Glow and GlowButton from components/intake
+
+  // TopicNoteField imported from components/intake
+
+  // Contact form removed; using ContactStep component
+
+  // Jump helper for "Continue your intake"
+  function jumpToNextRelevant() {
+    try {
+      const targetIdx = jumpToNextRelevantIndex({ reasonChoice, profile, selectedTopics, severities, steps });
+      setStepIdx(Math.max(0, Math.min(steps.length - 1, targetIdx)));
+    } catch {}
   }
 
   function toggleTopic(topicId: string) {
     const next = structuredClone(payload);
+    if (!next.intakeId) next.intakeId = generateIntakeIdFrom(next);
     const selected: string[] = Array.from(new Set([...(next.areas?.selected ?? [])]));
-    const i = selected.indexOf(topicId);
-    if (i >= 0) {
-      selected.splice(i, 1);
+    const idx = selected.indexOf(topicId);
+    if (idx >= 0) {
+      selected.splice(idx, 1);
+      if (next.areas?.severity) delete next.areas.severity[topicId];
+      if (next.notes?.byTopic) next.notes.byTopic[topicId] = null;
+      // cleanup deep-dive data and tracker entries for this topic
+      if (next.deepdive && typeof next.deepdive === 'object') {
+        delete next.deepdive[topicId];
+      }
+      if (next.deepdive_meta && typeof next.deepdive_meta === 'object') {
+        delete next.deepdive_meta[topicId];
+      }
+      if (Array.isArray(next.tracker?.candidates)) {
+        const filtered = next.tracker.candidates.filter((r: any) => !(typeof r?.field === 'string' && r.field.startsWith(`deepdive.${topicId}.`)));
+        next.tracker = { ...(next.tracker||{}), candidates: filtered };
+      }
     } else {
       selected.push(topicId);
     }
     next.areas = { ...(next.areas ?? {}), selected, severity: { ...(next.areas?.severity ?? {}) } };
-    // Recompute deep-dive queue (≥3)
-    const enq = (next.areas.selected ?? []).filter((t: string) => (next.areas.severity?.[t] ?? 0) >= 3);
+    const enq = selected.filter(t => (next.areas.severity?.[t] ?? 0) >= 3);
     next.queues = { ...(next.queues || {}), deepDive: Array.from(new Set(enq)) };
     setPayload(next);
-    autosave(next);
+    autosave(next, { immediate: true, silent: true });
+    // aiTurn disabled
   }
 
   function setSeverity(topicId: string, val: number) {
     const next = structuredClone(payload);
+    if (!next.intakeId) next.intakeId = generateIntakeIdFrom(next);
     const selected: string[] = Array.from(new Set([...(next.areas?.selected ?? [])]));
     if (!selected.includes(topicId)) selected.push(topicId);
     const severity = { ...(next.areas?.severity ?? {}), [topicId]: val };
     next.areas = { ...(next.areas ?? {}), selected, severity };
     const enq = (next.areas.selected ?? []).filter((t: string) => (severity?.[t] ?? 0) >= 3);
     next.queues = { ...(next.queues || {}), deepDive: Array.from(new Set(enq)) };
+    // if severity drops below 3, cleanup deep-dive and related trackers for this topic
+    if ((severity?.[topicId] ?? 0) < 3) {
+      if (next.deepdive && typeof next.deepdive === 'object') {
+        delete next.deepdive[topicId];
+      }
+      if (next.deepdive_meta && typeof next.deepdive_meta === 'object') {
+        delete next.deepdive_meta[topicId];
+      }
+      if (Array.isArray(next.tracker?.candidates)) {
+        const filtered = next.tracker.candidates.filter((r: any) => !(typeof r?.field === 'string' && r.field.startsWith(`deepdive.${topicId}.`)));
+        next.tracker = { ...(next.tracker||{}), candidates: filtered };
+      }
+    }
     setPayload(next);
-    autosave(next);
+    autosave(next, { immediate: true, silent: true });
+    // aiTurn disabled
+  }
+
+  // Topic note setter (debounced + non-blocking AI call)
+  function setTopicNote(topicId: string, text: string) {
+    const next = structuredClone(payload);
+    if (!next.intakeId) next.intakeId = generateIntakeIdFrom(next);
+    const byTopic = { ...(next.notes?.byTopic ?? {}), [topicId]: text };
+    next.notes = { ...(next.notes ?? {}), byTopic };
+    setPayload(next); autosave(next, { silent: true });
+    // Mark typing state to suppress AI/UI refresh while actively typing
+    isTypingRef.current = true;
+    if (typingResetTimer.current) clearTimeout(typingResetTimer.current);
+    typingResetTimer.current = setTimeout(() => { isTypingRef.current = false; }, 1200);
+    // Throttle AI suggestions to avoid jitter while typing quickly
+    try { if (aiNotesTimerRef.current[topicId]) clearTimeout(aiNotesTimerRef.current[topicId]); } catch {}
+    aiNotesTimerRef.current[topicId] = setTimeout(() => {}, 2500);
   }
 
   function setReasonChoice(v: 'problem' | 'peak') {
@@ -172,148 +307,175 @@ export default function Flow() {
     setByPath(next, 'story.flow_variant', v);
     setPayload(next);
     autosave(next);
+    // aiTurn disabled
   }
-
-  const topics: { id: string; label: string }[] = [
-    { id: 'anx', label: 'Stress & anxiety' },
-    { id: 'dep', label: 'Mood & depression' },
-    { id: 'mem', label: 'Memory & thinking' },
-    { id: 'imp', label: 'Impulsivity' },
-    { id: 'sleep', label: 'Sleep issues' },
-    { id: 'learn', label: 'Learning issues (kids)' },
-  ];
 
   const selectedTopics: string[] = payload.areas?.selected ?? [];
   const severities: Record<string, number> = payload.areas?.severity ?? {};
   const reasonChoice: 'problem' | 'peak' | undefined = payload.story?.reason_choice;
+  const profile = payload.profile ?? {};
+  const contactDraftRef = useRef<any>(profile);
+  const [ddIndex, setDdIndex] = useState(0);
+  const [finished, setFinished] = useState(false);
+  const [lastAssistant, setLastAssistant] = useState<string>('');
+  const [topicNoteLocal, setTopicNoteLocal] = useState<string>('');
+  const [topicNoteTopicId, setTopicNoteTopicId] = useState<string>('');
+  const [ddDraft, setDdDraft] = useState<Record<string, number>>({});
+  const [ddWhyDraft, setDdWhyDraft] = useState<Record<string, string>>({});
+  const [chipHint, setChipHint] = useState<boolean>(false);
+  const topicNoteLatestRef = useRef<string>('');
+  // recompute queue is handled on severity change; no deep-dive UI in this scope
+  // AI call helper
+  const aiTurn = useCallback(async () => {}, []);
+  // Clamp stepIdx if selection changes and steps shrink
+  useEffect(() => {
+    if (stepIdx >= steps.length) {
+      setStepIdx(Math.max(0, steps.length - 1));
+    }
+  }, [steps.length, stepIdx]);
+
+  useEffect(() => {}, [current?.id]);
+
+  // When entering deep_dive, handle skip if no queue; reset ddIndex
+  useEffect(() => {
+    if (current?.type !== 'deep_dive') return;
+    const q = payload?.queues?.deepDive ?? [];
+    setDdIndex(0);
+    if (q.length === 0) {
+      nextStep();
+      return;
+    }
+    // For peak variant, same rule: only proceed if any were enqueued (already handled by q.length check)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.type]);
+
+  // Auto-skip ISI if under 18
+  useEffect(() => {
+    if (current?.type !== 'isi') return;
+    try {
+      const bd = (payload?.profile?.birthdate || '').toString();
+      if (!bd) return;
+      const today = new Date();
+      const bdt = new Date(bd);
+      let age = today.getFullYear() - bdt.getFullYear();
+      const m = today.getMonth() - bdt.getMonth();
+      if (m < 0 || (m === 0 && today.getDate() < bdt.getDate())) age--;
+      if (age < 18) nextStep();
+    } catch {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.type]);
+
+  // Keep topic note local state in sync when topic changes
+  useEffect(() => {
+    if (current?.type !== 'topic_rate') return;
+    const topicId = current?.meta?.topicId as string;
+    if (topicId && topicId !== topicNoteTopicId) {
+      const existing: string = getByPath(payload, `notes.byTopic.${topicId}`) ?? '';
+      setTopicNoteTopicId(topicId);
+      setTopicNoteLocal(existing);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.id]);
+
+  // no deep-dive items in this scope
 
   return (
     <div className="mx-auto w-full max-w-screen-sm sm:max-w-screen-md lg:max-w-screen-lg px-4 sm:px-6 lg:px-8 py-8">
       <Glow>
       <Card className="relative">
         <CardHeader>
-          <CardTitle>{current.title}</CardTitle>
-          {current.description && <CardDescription>{current.description}</CardDescription>}
+          <StepHeader title={current.title} description={current.description} showWelcome={stepIdx===0 && !!payload?.intakeId} firstName={profile?.first_name} onContinue={jumpToNextRelevant} />
         </CardHeader>
         <CardContent className="space-y-6">
+          {/* AI header removed for simplicity */}
           {current.type === 'singleSelect' && (
-            <div className="grid gap-3">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3" role="radiogroup" aria-label="Reason for visit">
-                {[
-                  { v: 'problem', label: 'Addressing a specific problem' },
-                  { v: 'peak', label: 'Peak performance / optimization' },
-                ].map((opt) => {
-                  const selected = reasonChoice === (opt.v as 'problem'|'peak');
-                  return (
-                    <button
-                      key={opt.v}
-                      role="radio"
-                      aria-checked={selected}
-                      onClick={() => setReasonChoice(opt.v as 'problem'|'peak')}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          setReasonChoice(opt.v as 'problem'|'peak');
-                        } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-                          e.preventDefault();
-                          const options: Array<'problem'|'peak'> = ['problem','peak'];
-                          const idx = options.indexOf(opt.v as 'problem'|'peak');
-                          const nextIdx = e.key === 'ArrowLeft' ? (idx + options.length - 1) % options.length : (idx + 1) % options.length;
-                          setReasonChoice(options[nextIdx]);
-                        }
-                      }}
-                      className={[
-                        'rounded-lg border px-4 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
-                        selected ? 'border-primary bg-primary/5' : 'hover:bg-accent'
-                      ].join(' ')}
-                    >
-                      {opt.label}
-                    </button>
-                  );
-                })}
-              </div>
+            <ReasonStep reasonChoice={reasonChoice} setReasonChoice={setReasonChoice} />
+          )}
+
+          {current.type === 'areas_select' && (
+            <AreasSelectStep selected={selectedTopics} toggle={toggleTopic} />
+          )}
+
+          {current.type === 'contact' && (
+            <ContactStep profile={profile} onDraft={(p)=>{ (contactDraftRef as any).current = p; }} />
+          )}
+
+          {current.type === 'topic_rate' && (() => {
+            const topicId = current.meta?.topicId as string;
+            const tLabel = topics.find(x=>x.id===topicId)?.label || topicId;
+            const tSeverity = severities?.[topicId] ?? 0;
+            const note: string = getByPath(payload, `notes.byTopic.${topicId}`) ?? '';
+            const { chips } = getGuidance(topicId, tSeverity || 0);
+            return (
+              <TopicRateStep
+                topicLabel={tLabel}
+                severity={tSeverity}
+                setSeverity={(n)=>setSeverity(topicId, n)}
+                note={note}
+                chips={chips}
+                onSave={(text)=>{ const next=structuredClone(payload); setByPath(next, `notes.byTopic.${topicId}`, text); setPayload(next); autosave(next,{silent:true}); topicNoteLatestRef.current = text; }}
+                onLiveChange={(text)=>{ topicNoteLatestRef.current = text; }}
+                onComplete={(text)=>{ const next=structuredClone(payload); setByPath(next, `notes.byTopic.${topicId}`, text); setPayload(next); autosave(next,{immediate:true,silent:true}); setLastAssistant(text?`You noted: ${text.slice(0,180)}${text.length>180?'…':''}`:''); nextStep(); }}
+              />
+            );
+          })()}
+
+          {current.type === 'deep_dive' && (() => {
+            const q: string[] = payload?.queues?.deepDive ?? [];
+            if (!Array.isArray(q) || q.length === 0) return null;
+            const topicId = q[Math.max(0, Math.min(ddIndex, q.length - 1))];
+            const topicLabel = topics.find(t=>t.id===topicId)?.label || topicId;
+            const values: Record<string, number> = Object.fromEntries((DEEP_ITEMS[topicId]||[]).map(it => [it.key, Number(getByPath(payload, `deepdive.${topicId}.${it.key}`) ?? 0)]));
+            const whyVals: Record<string, string> = Object.fromEntries((DEEP_ITEMS[topicId]||[]).map(it => [it.key, String(getByPath(payload, `deepdive_meta.${topicId}.${it.key}.why`) ?? '')]));
+            return (
+              <DeepDiveStep
+                topicId={topicId}
+                topicLabel={topicLabel}
+                values={values}
+                onChange={(itemKey,n)=>{ const ddKey=`${topicId}.${itemKey}`; setDdDraft((d)=>({ ...d, [ddKey]: n })); }}
+                onCommit={(itemKey,n)=>{ setDeepDive(topicId, itemKey, n); const ddKey=`${topicId}.${itemKey}`; setDdDraft((d)=>({ ...d, [ddKey]: n })); }}
+                why={whyVals}
+                onWhyChange={(itemKey,t)=>{ const ddKey=`${topicId}.${itemKey}`; setDdWhyDraft((m)=>({ ...m, [ddKey]: t })); }}
+                onWhyCommit={(itemKey,t)=>{ const next=structuredClone(payload); setByPath(next, `deepdive_meta.${topicId}.${itemKey}.why`, (t||'').trim()); setPayload(next); autosave(next,{silent:true}); }}
+              />
+            );
+          })()}
+
+          {current.type === 'daily' && (
+            <div className="grid gap-4">
+              <div className="text-sm text-muted-foreground">Daily habits & health — coming soon.</div>
             </div>
           )}
 
-          {current.type === 'areas' && (
+          {current.type === 'sleep_short' && (
             <div className="grid gap-4">
-              <div className="flex flex-wrap gap-2" aria-label="Topics">
-                {topics.map((t) => {
-                  const isSelected = selectedTopics.includes(t.id);
-                  return (
-                    <button
-                      key={t.id}
-                      type="button"
-                      aria-pressed={isSelected}
-                      onClick={() => toggleTopic(t.id)}
-                      className={[
-                        'rounded-full px-3 py-1 text-sm border transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
-                        isSelected ? 'border-primary bg-primary/5' : 'hover:bg-accent'
-                      ].join(' ')}
-                    >
-                      {t.label}
-                    </button>
-                  );
-                })}
-              </div>
+              <div className="text-sm text-muted-foreground">Short sleep form — coming soon.</div>
+            </div>
+          )}
 
-              {selectedTopics.length > 0 && (
-                <div className="grid gap-3">
-                  <span className="sr-only">Rate 1 (mild) to 5 (severe).</span>
-                  {selectedTopics.map((t) => (
-                    <div key={t} className="grid gap-2">
-                      <div className="text-sm font-medium">{topics.find(x=>x.id===t)?.label}</div>
-                      <div role="radiogroup" aria-label={`${t} severity`} className="flex items-center gap-2">
-                        {[1,2,3,4,5].map(n => {
-                          const sel = (severities?.[t] ?? 0) === n;
-                          return (
-                            <button
-                              key={n}
-                              role="radio"
-                              aria-checked={sel}
-                              onClick={() => setSeverity(t, n)}
-                              onKeyDown={(e)=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); setSeverity(t,n);} }}
-                              className={[
-                                'h-8 w-8 rounded-full border text-sm grid place-items-center focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
-                                sel ? 'border-primary bg-primary/10' : 'hover:bg-accent'
-                              ].join(' ')}
-                            >{n}</button>
-                          );
-                        })}
-                        <span className="ml-2 text-xs text-muted-foreground">1 = mild · 5 = severe</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+          {current.type === 'cec' && (
+            <div className="grid gap-4">
+              <div className="text-sm text-muted-foreground">CEC questionnaire — coming soon.</div>
+            </div>
+          )}
 
-              <div className="grid gap-2 pt-2">
-                <label className="text-sm font-medium">Anything you want us to know before we zoom in?</label>
-                <div className="text-xs text-muted-foreground">Optional — 1–3 sentences is perfect.</div>
-                <div className="flex flex-wrap gap-2">
-                  {[
-                    'When it started + what sets it off',
-                    'What “better” would look like',
-                    'Recent changes in sleep, stress, meds'
-                  ].map((s, i) => (
-                    <button
-                      key={i}
-                      type="button"
-                      className="rounded-full border px-3 py-1 text-xs hover:bg-accent"
-                      onClick={() => {
-                        const cur = getByPath(payload, 'story.open_comment') ?? '';
-                        const prefix = (s + ': ');
-                        updateField('story.open_comment', cur ? (cur + (cur.endsWith('\n')?'':'\n') + prefix) : prefix);
-                      }}
-                    >{s}</button>
-                  ))}
-                </div>
-                <textarea
-                  className="w-full min-h-[100px] rounded-md border p-3 text-base"
-                  placeholder="Since March, I’ve had trouble focusing at work; gets worse after poor sleep.\nBetter would be falling asleep within 20 minutes and waking rested.\nPanic spikes in crowded places; I’m okay at home."
-                  value={getByPath(payload, 'story.open_comment') ?? ''}
-                  onChange={(e)=>updateField('story.open_comment', e.target.value)}
-                />
+          {current.type === 'metabolic' && (
+            <div className="grid gap-4">
+              <div className="text-sm text-muted-foreground">Metabolic — coming soon.</div>
+            </div>
+          )}
+
+          {current.type === 'isi' && (
+            <div className="grid gap-4">
+              <div className="text-sm text-muted-foreground">Insomnia Severity Index — coming soon.</div>
+            </div>
+          )}
+
+          {current.type === 'review' && (
+            <div className="grid gap-4">
+              <div className="text-sm text-muted-foreground">Review & submit — coming soon.</div>
+              <div>
+                <GlowButton onClick={async ()=>{ await markComplete(); setFinished(true); }} disabled={finished}>Finish</GlowButton>
               </div>
             </div>
           )}
@@ -332,26 +494,50 @@ export default function Flow() {
                 value={[Number(getByPath(payload, current.field) ?? 0)]}
                 min={current.scale === '1-5' ? 1 : 0}
                 max={current.scale === '1-5' ? 5 : current.scale === 'minutes' ? 120 : 10}
-                step={1}
+                step={0.1}
                 onValueChange={(v)=>updateField(current.field, v[0])}
+                onValueCommit={(v)=>updateField(current.field, Math.round(v[0]))}
               />
-              <div className="text-sm text-muted-foreground">Value: {getByPath(payload, current.field) ?? 0}</div>
+              <div className="text-sm text-muted-foreground">Value: {Math.round(getByPath(payload, current.field) ?? 0)}</div>
             </div>
           )}
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 pt-2">
-            <Button variant="outline" onClick={prevStep} disabled={stepIdx===0}>Back</Button>
-            <GlowButton
-              onClick={nextStep}
-              disabled={
-                (current.id === 'reason' && !reasonChoice) ||
-                (current.id === 'areas' && (
-                  (selectedTopics.length === 0) || selectedTopics.some(t => !(severities?.[t] >= 1 && severities?.[t] <= 5))
-                )) ||
-                stepIdx===steps.length-1
+          <FooterNav
+            onBack={() => {
+              if (current.type === 'deep_dive') {
+                if (ddIndex > 0) setDdIndex(ddIndex - 1); else prevStep();
+                return;
               }
-            >Continue</GlowButton>
-            <div className="sm:ml-auto text-sm text-muted-foreground" aria-live="polite">{saving ? 'Saving…' : toast || 'Saved'}</div>
-          </div>
+              prevStep();
+            }}
+            onNext={() => {
+              if (current.id === 'contact') {
+                const draft = (contactDraftRef as any).current || {};
+                const next = structuredClone(payload);
+                next.profile = { ...(next.profile||{}), ...draft };
+                if (!next.intakeId) next.intakeId = generateIntakeIdFrom(next);
+                setPayload(next);
+                autosave(next, { silent: true });
+              }
+              if (current.type === 'deep_dive') {
+                const q: string[] = payload?.queues?.deepDive ?? [];
+                if (ddIndex < Math.max(0, q.length - 1)) setDdIndex(ddIndex + 1); else nextStep();
+                return;
+              }
+              if (current.type === 'topic_rate') {
+                const topicId = current.meta?.topicId as string;
+                const text = (topicNoteLatestRef.current || '').trim();
+                const next = structuredClone(payload);
+                setByPath(next, `notes.byTopic.${topicId}`, text);
+                setPayload(next);
+                autosave(next, { immediate: true, silent: true });
+              }
+              nextStep();
+            }}
+            backDisabled={stepIdx===0}
+            nextDisabled={(current.id === 'reason' && !reasonChoice) || (current.id === 'areas_select' && (selectedTopics.length === 0)) || (current.type === 'topic_rate' && !(severities?.[current.meta?.topicId] >= 1 && severities?.[current.meta?.topicId] <= 5)) || stepIdx===steps.length-1}
+            saving={saving}
+            toast={toast}
+          />
         </CardContent>
       </Card>
       </Glow>
