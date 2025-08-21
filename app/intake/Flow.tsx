@@ -271,6 +271,36 @@ export default function Flow() {
     } catch {}
   }
 
+  // Jump to last saved screen (best-effort heuristic)
+  function jumpToLastSaved() {
+    try {
+      // If deep-dive queue exists and has values, prefer deep_dive
+      const q: string[] = payload?.queues?.deepDive ?? [];
+      if (Array.isArray(q) && q.length > 0) {
+        const idx = steps.findIndex(s => s.id === 'deep_dive');
+        if (idx >= 0) { setStepIdx(idx); return; }
+      }
+      // If any topic selected without severity, go to first topic_rate pending; else last topic_rate
+      const pendingTopic = (payload?.areas?.selected ?? []).find((t: string) => !((payload?.areas?.severity?.[t] ?? 0) >= 1));
+      if (pendingTopic) {
+        const idx = steps.findIndex(s => s.id === `topic_${pendingTopic}`);
+        if (idx >= 0) { setStepIdx(idx); return; }
+      }
+      const lastTopic = (payload?.areas?.selected ?? [])[Math.max(0, ((payload?.areas?.selected ?? []).length - 1))];
+      if (lastTopic) {
+        const idx = steps.findIndex(s => s.id === `topic_${lastTopic}`);
+        if (idx >= 0) { setStepIdx(idx); return; }
+      }
+      // Otherwise if contact incomplete, go there; otherwise daily
+      const needContact = !(((profile.first_name||'').trim()) && ((profile.last_name||'').trim()) && ((profile.email||'').trim()));
+      if (needContact) { setStepIdx(1); return; }
+      const dailyIdx = steps.findIndex(s => s.id === 'daily');
+      if (dailyIdx >= 0) { setStepIdx(dailyIdx); return; }
+      // Fallback
+      jumpToNextRelevant();
+    } catch { jumpToNextRelevant(); }
+  }
+
   function toggleTopic(topicId: string) {
     const next = structuredClone(payload);
     if (!next.intakeId) next.intakeId = generateIntakeIdFrom(next);
@@ -428,7 +458,7 @@ export default function Flow() {
       <Glow>
       <Card className="relative">
         <CardHeader>
-          <StepHeader title={current.title} description={current.description} showWelcome={stepIdx===0 && !!payload?.intakeId} firstName={profile?.first_name} onContinue={jumpToNextRelevant} />
+          <StepHeader title={current.title} description={current.description} showWelcome={stepIdx===0 && !!payload?.intakeId} firstName={profile?.first_name} onContinue={jumpToLastSaved} />
         </CardHeader>
         <CardContent className="space-y-6">
           {/* AI header removed for simplicity */}
@@ -504,7 +534,21 @@ export default function Flow() {
             <DailyStep
               intakeId={payload?.intakeId}
               daily={payload?.daily || {}}
-              update={(rel, val)=>{ const next=structuredClone(payload); setByPath(next, `daily.${rel}`, val); setPayload(next); autosave(next,{silent:true}); }}
+              update={(rel, val)=>{
+                const next = structuredClone(payload);
+                if (rel === 'factors') {
+                  const cleaned = Object.fromEntries(Object.entries(val||{}).filter(([_,v])=>!!v));
+                  if (Object.keys(cleaned).length === 0) {
+                    try { if (next.daily && typeof next.daily === 'object') delete next.daily.factors; } catch {}
+                  } else {
+                    setByPath(next, 'daily.factors', cleaned);
+                  }
+                } else {
+                  setByPath(next, `daily.${rel}`, val);
+                }
+                setPayload(next);
+                autosave(next,{ immediate: true });
+              }}
               context={{ selectedTopics, severities, firstName: profile?.first_name }}
             />
           )}

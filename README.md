@@ -50,9 +50,11 @@ npm run dev
 - `lib/intake/*` – core (topics, deep items, guidance, paths, id, helpers, hooks, intakeApi)
 - `app/api/model-hook/route.ts` – minimal OpenAI chat endpoint (UI will no-op if disabled)
 - `app/api/intake-load/route.ts` – loads the latest (prefer incomplete) intake by email/clientId
-- `app/api/intake-save/route.ts` – idempotent intake write endpoint (merge semantics)
+- `app/api/intake-save/route.ts` – idempotent intake write endpoint (full payload replace; deletions persist)
 - `app/api/upload-profile/route.ts` – uploads profile photo to GCS folder
 - `app/api/generate-abstract-avatar/route.ts` – creates and stores a gradient SVG avatar
+- `app/api/meds-suggest/route.ts` – meds suggestions (local list + optional OpenAI expand)
+- `app/api/supps-suggest/route.ts` – supplement suggestions (local list + optional OpenAI)
 - `infra/` – Firestore rules/indexes
 
 ## Firestore layout
@@ -70,7 +72,10 @@ npm run dev
 - Areas step persists `areas.selected`, `areas.severity`, and enqueues `queues.deepDive` for items ≥3.
 - Contact step persists `profile.{first_name,last_name,email,phone,birthdate,photo_url}` and generates a stable human-ish `intakeId` if missing (initials + 6 digits).
 - Topic notes use a debounced background save (~1s idle), save on blur, and commit on Next. Typing is fully local to preserve focus; latest text is always persisted on Next.
-- Deep-dive sliders glide smoothly (0.1 UI step) and persist rounded 0–10 on release. If value > 6, an optional "why" input appears and saves on blur/Enter.
+- Deep-dive sliders glide smoothly (0.1 UI step) and persist rounded 0–10 on release. If value > 6, an optional "why" input appears and saves on blur/Enter. Existing text auto-focuses with caret at end.
+- Topic notes textarea auto-resizes to fit content; caret moves to end if text exists.
+- Contact: overlapping top-right avatar with Upload/Generate; seeds from auth photo; autosaves.
+- Daily: meds/supps multi-select chips with dropdown suggestions; saves immediately; Complicating factors store only selected entries (unchecked deletes key). "Continue" jumps to last relevant saved step.
 
 ## Release notes (2025-xx-xx)
 

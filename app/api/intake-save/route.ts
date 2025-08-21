@@ -27,16 +27,20 @@ export async function POST(req: NextRequest) {
     const ref = db.doc(`practices/${practiceId}/intakes/${id}`);
     const now = new Date().toISOString();
     const doc = await ref.get();
+    const prev = doc.exists ? (doc.data() as any) : {};
     const data: any = {
       practice_id: practiceId,
       client_id: clientId,
       intake_id: id,
+      // preserve created_at and complete if previously set
+      created_at: prev?.created_at || now,
+      complete: (prev?.complete === true) || (complete === true) ? true : undefined,
       updated_at: now,
-      payload,
+      payload, // replace payload fully so removed nested keys are dropped
     };
-    if (complete === true) data.complete = true;
-    if (!doc.exists) data.created_at = now;
-    await ref.set(data, { merge: true });
+    // Remove undefined fields so Firestore doesn't store them
+    if (data.complete === undefined) delete data.complete;
+    await ref.set(data, { merge: false });
 
     return NextResponse.json({ ok: true, intakeId: id, updated_at: now });
   } catch (e: any) {

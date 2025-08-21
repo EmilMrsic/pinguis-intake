@@ -45,6 +45,58 @@ export function DailyStep({
     debounceRef.current = setTimeout(() => update('note', val.trim()), 800);
   }
 
+  const [medQuery, setMedQuery] = useState<string>('');
+  const [medSuggestions, setMedSuggestions] = useState<string[]>([]);
+  const [showMedDropdown, setShowMedDropdown] = useState<boolean>(false);
+  const [selectedMeds, setSelectedMeds] = useState<string[]>(Array.isArray(daily?.meds_list) ? daily.meds_list : []);
+  const medBoxRef = useRef<HTMLDivElement | null>(null);
+  const medInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => { if (Array.isArray(daily?.meds_list)) setSelectedMeds(daily.meds_list); }, [daily?.meds_list]);
+
+  useEffect(() => {
+    let active = true;
+    const q = medQuery.trim();
+    const url = `/api/meds-suggest?q=${encodeURIComponent(q)}&limit=10`;
+    fetch(url).then(r=>r.json()).then((d)=>{ if (active && Array.isArray(d?.suggestions)) setMedSuggestions(d.suggestions); }).catch(()=>{});
+    return () => { active = false; };
+  }, [medQuery]);
+
+  function addMed(raw: string) {
+    const name = (raw || '').trim();
+    if (!name) return;
+    if (selectedMeds.includes(name)) { setMedQuery(''); return; }
+    const next = [...selectedMeds, name];
+    setSelectedMeds(next);
+    update('meds_list', next);
+    setMedQuery('');
+    setShowMedDropdown(false);
+    try { medInputRef.current?.focus(); } catch {}
+  }
+
+  function removeMed(name: string) {
+    const next = selectedMeds.filter(x => x !== name);
+    setSelectedMeds(next);
+    update('meds_list', next);
+  }
+
+  // Supplements state
+  const [suppQuery, setSuppQuery] = useState<string>('');
+  const [suppSuggestions, setSuppSuggestions] = useState<string[]>([]);
+  const [showSuppDropdown, setShowSuppDropdown] = useState<boolean>(false);
+  const [selectedSupps, setSelectedSupps] = useState<string[]>(Array.isArray(daily?.supps_list) ? daily.supps_list : []);
+  const suppInputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(()=>{ if (Array.isArray(daily?.supps_list)) setSelectedSupps(daily.supps_list); }, [daily?.supps_list]);
+  useEffect(()=>{
+    let active = true;
+    const q = suppQuery.trim();
+    const url = `/api/supps-suggest?q=${encodeURIComponent(q)}&limit=10`;
+    fetch(url).then(r=>r.json()).then((d)=>{ if (active && Array.isArray(d?.suggestions)) setSuppSuggestions(d.suggestions); }).catch(()=>{});
+    return () => { active = false; };
+  }, [suppQuery]);
+  function addSupp(raw: string) { const name=(raw||'').trim(); if(!name) return; if (selectedSupps.includes(name)) { setSuppQuery(''); return; } const next=[...selectedSupps, name]; setSelectedSupps(next); update('supps_list', next); setSuppQuery(''); setShowSuppDropdown(false); try { suppInputRef.current?.focus(); } catch {} }
+  function removeSupp(name: string) { const next=selectedSupps.filter(x=>x!==name); setSelectedSupps(next); update('supps_list', next); }
+
   return (
     <div className="grid gap-5">
       <div>
@@ -54,12 +106,74 @@ export function DailyStep({
 
       <div className="grid gap-2">
         <label className="text-sm font-medium">Medications</label>
-        <Input placeholder="Name, dose, frequency (comma separated)…" value={daily?.meds || ''} onChange={(e)=>update('meds', e.target.value)} />
+        <div className="relative" ref={medBoxRef}>
+          <div className="flex flex-wrap gap-2 rounded-md border p-2">
+            {selectedMeds.map((m) => (
+              <span key={m} className="inline-flex items-center gap-1 rounded-full border border-sky-200 bg-sky-100 text-sky-800 dark:border-sky-800 dark:bg-sky-900/30 dark:text-sky-300 px-2 py-0.5 text-xs">
+                {m}
+                <button type="button" className="ml-1 text-muted-foreground hover:text-foreground" onClick={()=>removeMed(m)}>×</button>
+              </span>
+            ))}
+            <input
+              ref={medInputRef}
+              className="min-w-[160px] flex-1 outline-none text-sm"
+              placeholder={selectedMeds.length ? 'Add another…' : 'Start typing to search common meds…'}
+              value={medQuery}
+              onChange={(e)=>{ setMedQuery(e.target.value); setShowMedDropdown(true); }}
+              onFocus={()=> setShowMedDropdown(true)}
+              onKeyDown={(e)=>{
+                if ((e.key === 'Enter' || e.key === ',') && medQuery.trim()) { e.preventDefault(); addMed(medQuery); }
+                if (e.key === 'Backspace' && !medQuery && selectedMeds.length) { removeMed(selectedMeds[selectedMeds.length-1]); }
+              }}
+              onBlur={()=> setTimeout(()=> setShowMedDropdown(false), 150)}
+            />
+          </div>
+          {showMedDropdown && medSuggestions.length > 0 && (
+            <div className="absolute left-0 right-0 z-10 mt-1 max-h-64 overflow-auto rounded-md border bg-background shadow">
+              {medSuggestions.map((s, i) => (
+                <button key={`${s}-${i}`} type="button" className="block w-full truncate px-3 py-2 text-left text-sm hover:bg-accent" onMouseDown={(e)=> e.preventDefault()} onClick={()=>addMed(s)}>
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="grid gap-2">
         <label className="text-sm font-medium">Supplements</label>
-        <Input placeholder="Name, dose, frequency (comma separated)…" value={daily?.supps || ''} onChange={(e)=>update('supps', e.target.value)} />
+        <div className="relative">
+          <div className="flex flex-wrap gap-2 rounded-md border p-2">
+            {selectedSupps.map((m) => (
+              <span key={m} className="inline-flex items-center gap-1 rounded-full border border-sky-200 bg-sky-100 text-sky-800 dark:border-sky-800 dark:bg-sky-900/30 dark:text-sky-300 px-2 py-0.5 text-xs">
+                {m}
+                <button type="button" className="ml-1 text-muted-foreground hover:text-foreground" onClick={()=>removeSupp(m)}>×</button>
+              </span>
+            ))}
+            <input
+              ref={suppInputRef}
+              className="min-w-[160px] flex-1 outline-none text-sm"
+              placeholder={selectedSupps.length ? 'Add another…' : 'Start typing to search common supplements…'}
+              value={suppQuery}
+              onChange={(e)=>{ setSuppQuery(e.target.value); setShowSuppDropdown(true); }}
+              onFocus={()=> setShowSuppDropdown(true)}
+              onKeyDown={(e)=>{
+                if ((e.key==='Enter' || e.key===',') && suppQuery.trim()) { e.preventDefault(); addSupp(suppQuery); }
+                if (e.key==='Backspace' && !suppQuery && selectedSupps.length) { removeSupp(selectedSupps[selectedSupps.length-1]); }
+              }}
+              onBlur={()=> setTimeout(()=> setShowSuppDropdown(false), 150)}
+            />
+          </div>
+          {showSuppDropdown && suppSuggestions.length > 0 && (
+            <div className="absolute left-0 right-0 z-10 mt-1 max-h-64 overflow-auto rounded-md border bg-background shadow">
+              {suppSuggestions.map((s, i) => (
+                <button key={`${s}-${i}`} type="button" className="block w-full truncate px-3 py-2 text-left text-sm hover:bg-accent" onMouseDown={(e)=> e.preventDefault()} onClick={()=>addSupp(s)}>
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="grid gap-2">
@@ -70,7 +184,8 @@ export function DailyStep({
             return (
               <label key={f.id} className="flex items-center gap-2 text-sm">
                 <Checkbox checked={checked} onCheckedChange={(v)=>{
-                  const next = { ...(daily?.factors||{}) } as any; next[f.id] = Boolean(v);
+                  const next = { ...(daily?.factors||{}) } as any;
+                  if (v === true) { next[f.id] = true; } else { delete next[f.id]; }
                   update('factors', next);
                 }} />
                 <span>{f.label}</span>
