@@ -14,6 +14,14 @@ export function TopicNoteField({
   const liveRows = text.length > 120 || text.includes('\n') ? 3 : 1;
   const debounceRef = useRef<any>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const adjustHeight = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    try {
+      el.style.height = 'auto';
+      el.style.height = `${el.scrollHeight}px`;
+    } catch {}
+  }, []);
   useEffect(() => {
     setText(initial || '');
     setShowHint(false);
@@ -28,6 +36,7 @@ export function TopicNoteField({
         });
       } catch {}
     }
+    requestAnimationFrame(adjustHeight);
   }, [topicId]);
 
   const scheduleSave = useCallback((val: string) => {
@@ -48,13 +57,13 @@ export function TopicNoteField({
         ))}
       </div>
       <textarea
-        className="w-full min-h-[44px] max-h-[120px] resize-none rounded-md border p-3 text-base leading-6"
+        className="w-full min-h-[44px] resize-none rounded-md border p-3 text-base leading-6"
         rows={liveRows}
         placeholder="A quick line in your own words…"
         value={text}
         autoFocus
         ref={textareaRef}
-        onChange={(e)=> { const v=e.target.value; setText(v); onLiveChange && onLiveChange(v); scheduleSave(v); if ((v||'').length > 0) setShowHint(false); if (debug) console.log('[Intake] note:change', { topicId, len: v.length, t: Date.now() }); }}
+        onChange={(e)=> { const v=e.target.value; setText(v); onLiveChange && onLiveChange(v); scheduleSave(v); requestAnimationFrame(adjustHeight); if ((v||'').length > 0) setShowHint(false); if (debug) console.log('[Intake] note:change', { topicId, len: v.length, t: Date.now() }); }}
         onBlur={(e)=> { const t=(e.currentTarget.value||'').trim(); if (debug) console.log('[Intake] note:blur', { topicId, len: t.length, t: Date.now() }); onSave(t); }}
         onFocus={(e)=>{ if (debug) console.log('[Intake] note:focus', { topicId, t: Date.now() }); try { const len=e.currentTarget.value.length; e.currentTarget.setSelectionRange(len,len); } catch {} }}
         onKeyDown={(e)=>{
