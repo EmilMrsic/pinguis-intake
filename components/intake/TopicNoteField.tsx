@@ -13,7 +13,22 @@ export function TopicNoteField({
   const [showHint, setShowHint] = useState<boolean>(false);
   const liveRows = text.length > 120 || text.includes('\n') ? 3 : 1;
   const debounceRef = useRef<any>(null);
-  useEffect(() => { setText(initial || ''); setShowHint(false); }, [topicId]);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  useEffect(() => {
+    setText(initial || '');
+    setShowHint(false);
+    if ((initial || '').length > 0) {
+      try {
+        requestAnimationFrame(() => {
+          const el = textareaRef.current;
+          if (el) {
+            el.focus({ preventScroll: true });
+            const len = el.value.length; el.setSelectionRange(len, len);
+          }
+        });
+      } catch {}
+    }
+  }, [topicId]);
 
   const scheduleSave = useCallback((val: string) => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -38,9 +53,10 @@ export function TopicNoteField({
         placeholder="A quick line in your own words…"
         value={text}
         autoFocus
+        ref={textareaRef}
         onChange={(e)=> { const v=e.target.value; setText(v); onLiveChange && onLiveChange(v); scheduleSave(v); if ((v||'').length > 0) setShowHint(false); if (debug) console.log('[Intake] note:change', { topicId, len: v.length, t: Date.now() }); }}
         onBlur={(e)=> { const t=(e.currentTarget.value||'').trim(); if (debug) console.log('[Intake] note:blur', { topicId, len: t.length, t: Date.now() }); onSave(t); }}
-        onFocus={()=>{ if (debug) console.log('[Intake] note:focus', { topicId, t: Date.now() }); }}
+        onFocus={(e)=>{ if (debug) console.log('[Intake] note:focus', { topicId, t: Date.now() }); try { const len=e.currentTarget.value.length; e.currentTarget.setSelectionRange(len,len); } catch {} }}
         onKeyDown={(e)=>{
           if (debug) console.log('[Intake] note:key', { key: e.key, topicId, t: Date.now() });
           e.stopPropagation();
