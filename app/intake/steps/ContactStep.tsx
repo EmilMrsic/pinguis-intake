@@ -48,14 +48,6 @@ export function ContactStep({ profile, onDraft }: { profile: any; onDraft: (p:an
         <div className="grid gap-1"><label className="text-sm font-medium">Phone</label><Input type="tel" value={local.phone} onChange={(e)=>setField('phone', e.target.value)} /></div>
       </div>
       <div className="grid gap-1"><label className="text-sm font-medium">Birthdate</label><Input type="date" value={local.birthdate} onChange={(e)=>setField('birthdate', e.target.value)} /></div>
-      <div className="flex items-center justify-center gap-3">
-        <button type="button" className="rounded-md border px-3 py-1.5 text-sm" onClick={()=>{
-          // signal to parent to generate abstract avatar by clearing and setting a sentinel; parent saves
-          const next = { ...local };
-          setLocal(next); onDraft(next);
-          try { const ev:any = new CustomEvent('request-generate-avatar'); window.dispatchEvent(ev); } catch {}
-        }}>Generate abstract avatar</button>
-      </div>
     </div>
   );
 }
