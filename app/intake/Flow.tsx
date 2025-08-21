@@ -24,6 +24,7 @@ import React from 'react';
 import { topics as topicsCatalog } from '@/lib/intake/topics';
 import { DEEP_ITEMS as DEEP_ITEMS_CONST } from '@/lib/intake/deepItems';
 import { getGuidance as getGuidanceLib } from '@/lib/intake/guidance';
+import { uploadProfile, generateAbstractAvatar } from '@/lib/intake/intakeApi';
 import { setByPath as setByPathLib, getByPath as getByPathLib } from '@/lib/intake/paths';
  
 
@@ -111,6 +112,10 @@ export default function Flow() {
             if (email && !merged?.profile?.email) {
               merged.profile = { ...(merged.profile||{}), email };
             }
+            // Seed photo from auth if available and none saved yet
+            if ((u?.photoURL || '').trim() && !(merged?.profile?.photo_url)) {
+              merged.profile = { ...(merged.profile||{}), photo_url: String(u?.photoURL) };
+            }
             if (data.intakeId) merged.intakeId = data.intakeId;
             hydratedRef.current = true;
             return merged;
@@ -133,6 +138,44 @@ export default function Flow() {
   const hydratedRef = useRef<boolean>(false);
   const payloadRef = useRef<Record<string, any>>({});
   useEffect(() => { payloadRef.current = payload; }, [payload]);
+  // Handle avatar actions dispatched from ContactStep
+  useEffect(() => {
+    function onUpload(ev: any) {
+      const file: File | undefined = ev?.detail?.file;
+      if (!file) return;
+      const id = payloadRef.current?.intakeId || generateIntakeIdFrom(payloadRef.current);
+      uploadProfile(file, id).then((res:any)=>{
+        const url = String(res?.url || '');
+        if (!url) return;
+        const next = structuredClone(payloadRef.current || {});
+        next.intakeId = id;
+        next.profile = { ...(next.profile||{}), photo_url: url };
+        setPayload(next);
+        autosave(next, { immediate: true, silent: true });
+      }).catch(()=>{});
+    }
+    function onGenerate() {
+      const id = payloadRef.current?.intakeId || generateIntakeIdFrom(payloadRef.current);
+      generateAbstractAvatar(id).then((res:any)=>{
+        const url = String(res?.url || '');
+        if (!url) return;
+        const next = structuredClone(payloadRef.current || {});
+        next.intakeId = id;
+        next.profile = { ...(next.profile||{}), photo_url: url };
+        setPayload(next);
+        autosave(next, { immediate: true, silent: true });
+      }).catch(()=>{});
+    }
+    try {
+      window.addEventListener('request-upload-photo', onUpload as any);
+      window.addEventListener('request-generate-avatar', onGenerate as any);
+      return () => {
+        window.removeEventListener('request-upload-photo', onUpload as any);
+        window.removeEventListener('request-generate-avatar', onGenerate as any);
+      };
+    } catch { return; }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // autosave on payload change (debounced)
   const timer = useRef<NodeJS.Timeout | null>(null);
