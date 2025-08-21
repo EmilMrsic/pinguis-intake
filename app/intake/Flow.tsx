@@ -12,6 +12,7 @@ import { AreasSelectStep } from '@/app/intake/steps/AreasSelectStep';
 import { TopicRateStep } from '@/app/intake/steps/TopicRateStep';
 import { DeepDiveStep } from '@/app/intake/steps/DeepDiveStep';
 import { TopicNoteField } from '@/app/intake/steps/TopicNoteField';
+import DailyStep from '@/app/intake/steps/DailyStep';
 import { FooterNav } from '@/components/intake/FooterNav';
 import { StepHeader } from '@/components/intake/StepHeader';
 import { saveIntakeAction } from './actions';
@@ -500,9 +501,12 @@ export default function Flow() {
           })()}
 
           {current.type === 'daily' && (
-            <div className="grid gap-4">
-              <div className="text-sm text-muted-foreground">Daily habits & health — coming soon.</div>
-            </div>
+            <DailyStep
+              intakeId={payload?.intakeId}
+              daily={payload?.daily || {}}
+              update={(rel, val)=>{ const next=structuredClone(payload); setByPath(next, `daily.${rel}`, val); setPayload(next); autosave(next,{silent:true}); }}
+              context={{ selectedTopics, severities, firstName: profile?.first_name }}
+            />
           )}
 
           {current.type === 'sleep_short' && (
