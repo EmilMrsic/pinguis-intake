@@ -19,11 +19,13 @@ export function DeepDiveStep({
   onWhyCommit: (itemKey: string, t: string) => void;
 }) {
   const items = DEEP_ITEMS[topicId] ?? [];
+  const focusedOnceRef = React.useRef<boolean>(false);
   return (
     <div className="grid gap-4">
       <div className="text-base font-semibold">Symptom details: {topicLabel}</div>
       {items.map((it) => {
         const val = values[it.key] ?? 0;
+        const hasText = ((why?.[it.key] ?? '') as string).trim().length > 0;
         return (
           <div key={it.key} className="grid gap-2">
             <div className="flex items-center justify-between">
@@ -34,7 +36,22 @@ export function DeepDiveStep({
             {val > 6 && (
               <div className="grid gap-1">
                 <label className="text-xs text-muted-foreground">Why is {it.label.toLowerCase()} a {Math.round(val)} today for you? <span className="opacity-70">(optional)</span></label>
-                <input className="rounded-md border px-3 py-2 text-sm" value={why[it.key] ?? ''} onChange={(e)=>onWhyChange(it.key, e.target.value)} onBlur={(e)=>onWhyCommit(it.key, (e.currentTarget.value||'').trim())} />
+                <input
+                  className="rounded-md border px-3 py-2 text-sm"
+                  value={why[it.key] ?? ''}
+                  onChange={(e)=>onWhyChange(it.key, e.target.value)}
+                  onBlur={(e)=>onWhyCommit(it.key, (e.currentTarget.value||'').trim())}
+                  onFocus={(e)=>{ try { const len=e.currentTarget.value.length; e.currentTarget.setSelectionRange(len,len); } catch {} }}
+                  ref={(el)=>{
+                    if (el && hasText && !focusedOnceRef.current) {
+                      try {
+                        el.focus({ preventScroll: true });
+                        const len = el.value.length; el.setSelectionRange(len, len);
+                      } catch {}
+                      focusedOnceRef.current = true;
+                    }
+                  }}
+                />
               </div>
             )}
           </div>
