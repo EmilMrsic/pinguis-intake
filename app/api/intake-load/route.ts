@@ -48,6 +48,7 @@ export async function POST(req: NextRequest) {
         // Prefer incomplete
         const incomplete = qs.docs.filter(d => (d.data() as any)?.complete !== true);
         const cand = pickLatest(incomplete.length ? incomplete : qs.docs);
+        if (!cand) return NextResponse.json({ ok: true, intakeId: null, payload: {} });
         const resp = await docToResp(cand);
         return NextResponse.json({ ok: true, ...resp });
       }
@@ -59,6 +60,7 @@ export async function POST(req: NextRequest) {
       if (!qs.empty) {
         const incomplete = qs.docs.filter(d => (d.data() as any)?.complete !== true);
         const cand = pickLatest(incomplete.length ? incomplete : qs.docs);
+        if (!cand) return NextResponse.json({ ok: true, intakeId: null, payload: {} });
         const resp = await docToResp(cand);
         return NextResponse.json({ ok: true, ...resp });
       }

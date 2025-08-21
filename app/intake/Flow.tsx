@@ -425,8 +425,23 @@ export default function Flow() {
             if (!Array.isArray(q) || q.length === 0) return null;
             const topicId = q[Math.max(0, Math.min(ddIndex, q.length - 1))];
             const topicLabel = topics.find(t=>t.id===topicId)?.label || topicId;
-            const values: Record<string, number> = Object.fromEntries((DEEP_ITEMS[topicId]||[]).map(it => [it.key, Number(getByPath(payload, `deepdive.${topicId}.${it.key}`) ?? 0)]));
-            const whyVals: Record<string, string> = Object.fromEntries((DEEP_ITEMS[topicId]||[]).map(it => [it.key, String(getByPath(payload, `deepdive_meta.${topicId}.${it.key}.why`) ?? '')]));
+            // Merge live draft values for smooth, continuous slider control
+            const values: Record<string, number> = Object.fromEntries(
+              (DEEP_ITEMS[topicId]||[]).map(it => {
+                const ddKey = `${topicId}.${it.key}`;
+                const draft = ddDraft[ddKey];
+                const persisted = Number(getByPath(payload, `deepdive.${topicId}.${it.key}`) ?? 0);
+                return [it.key, typeof draft === 'number' ? draft : persisted];
+              })
+            );
+            const whyVals: Record<string, string> = Object.fromEntries(
+              (DEEP_ITEMS[topicId]||[]).map(it => {
+                const ddKey = `${topicId}.${it.key}`;
+                const draft = ddWhyDraft[ddKey];
+                const persisted = String(getByPath(payload, `deepdive_meta.${topicId}.${it.key}.why`) ?? '');
+                return [it.key, typeof draft === 'string' ? draft : persisted];
+              })
+            );
             return (
               <DeepDiveStep
                 topicId={topicId}
@@ -520,6 +535,26 @@ export default function Flow() {
               }
               if (current.type === 'deep_dive') {
                 const q: string[] = payload?.queues?.deepDive ?? [];
+                // Commit any outstanding draft values before navigating
+                try {
+                  const topicId = q[Math.max(0, Math.min(ddIndex, q.length - 1))];
+                  const entries = Object.entries(ddDraft).filter(([k]) => k.startsWith(`${topicId}.`));
+                  for (const [k, v] of entries) {
+                    const itemKey = k.split('.').slice(1).join('.');
+                    if (typeof v === 'number') setDeepDive(topicId, itemKey, v as number);
+                  }
+                  // Commit any outstanding draft WHY text
+                  const whyEntries = Object.entries(ddWhyDraft).filter(([k]) => k.startsWith(`${topicId}.`));
+                  if (whyEntries.length > 0) {
+                    const next = structuredClone(payload);
+                    for (const [k, v] of whyEntries) {
+                      const itemKey = k.split('.').slice(1).join('.');
+                      setByPath(next, `deepdive_meta.${topicId}.${itemKey}.why`, String(v||'').trim());
+                    }
+                    setPayload(next);
+                    autosave(next, { silent: true });
+                  }
+                } catch {}
                 if (ddIndex < Math.max(0, q.length - 1)) setDdIndex(ddIndex + 1); else nextStep();
                 return;
               }
