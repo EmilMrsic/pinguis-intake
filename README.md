@@ -44,7 +44,10 @@ npm run dev
 
 ## Project structure (high-level)
 
-- `app/intake/Flow.tsx` – single-file renderer for steps: Reason → Areas → ...
+- `app/intake/Flow.tsx` – thin conductor for steps (hooks + atoms)
+- `app/intake/steps/*` – step components (Reason, Contact, Areas, TopicRate, DeepDive, stubs)
+- `components/intake/*` – UI atoms (Glow, GlowButton, FooterNav, TopicNoteField, StepHeader)
+- `lib/intake/*` – core (topics, deep items, guidance, paths, id, helpers, hooks, intakeApi)
 - `app/api/model-hook/route.ts` – minimal OpenAI chat endpoint (UI will no-op if disabled)
 - `app/api/intake-load/route.ts` – loads the latest (prefer incomplete) intake by email/clientId
 - `app/api/intake-save/route.ts` – idempotent intake write endpoint (merge semantics)
@@ -66,7 +69,15 @@ npm run dev
 - Reason step persists both `story.reason_choice` and `story.flow_variant`.
 - Areas step persists `areas.selected`, `areas.severity`, and enqueues `queues.deepDive` for items ≥3.
 - Contact step persists `profile.{first_name,last_name,email,phone,birthdate,photo_url}` and generates a stable human-ish `intakeId` if missing (initials + 6 digits).
-- Deep-dive notes are local while typing; saved on blur/Next to prevent UI jitter.
+- Topic notes use a debounced background save (~1s idle), save on blur, and commit on Next. Typing is fully local to preserve focus; latest text is always persisted on Next.
+- Deep-dive sliders glide smoothly (0.1 UI step) and persist rounded 0–10 on release. If value > 6, an optional "why" input appears and saves on blur/Enter.
+
+## Release notes (2025-xx-xx)
+
+- Simplified TopicRate UX: one-line guidance + ≤3 chips, compact textarea (auto-expands), Enter-to-advance.
+- Fixed input focus issues by moving note state local and debouncing autosave.
+- Implemented DeepDive with smooth sliders and optional per-item "why" notes.
+- Added modular structure: hooks, steps, and UI atoms; Flow is now a thin conductor.
 
 ## Safety
 
