@@ -10,7 +10,9 @@ import { ReasonStep } from '@/app/intake/steps/ReasonStep';
 import { ContactStep } from '@/app/intake/steps/ContactStep';
 import { AreasSelectStep } from '@/app/intake/steps/AreasSelectStep';
 import { TopicRateStep } from '@/app/intake/steps/TopicRateStep';
+import TopicRateContainer from '@/app/intake/steps/TopicRateContainer';
 import { DeepDiveStep } from '@/app/intake/steps/DeepDiveStep';
+import DeepDiveContainer from '@/app/intake/steps/DeepDiveContainer';
 import { TopicNoteField } from '@/app/intake/steps/TopicNoteField';
 import DailyStep from '@/app/intake/steps/DailyStep';
 import { FooterNav } from '@/components/intake/FooterNav';
@@ -21,8 +23,10 @@ import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import { FLOW_VARIANT } from '@/lib/intake/config';
 import { devPracticeId, devClientId } from '@/lib/devIds';
 import { jumpToNextRelevantIndex, markIntakeComplete } from '@/lib/intake/helpers';
+import { useAutosavePayload } from '@/app/intake/hooks/useAutosave';
 import React from 'react';
 import { topics as topicsCatalog } from '@/lib/intake/topics';
+import { buildSteps } from '@/app/intake/utils/buildSteps';
 import { DEEP_ITEMS as DEEP_ITEMS_CONST } from '@/lib/intake/deepItems';
 import { getGuidance as getGuidanceLib } from '@/lib/intake/guidance';
 import { uploadProfile, generateAbstractAvatar } from '@/lib/intake/intakeApi';
@@ -32,13 +36,19 @@ import SleepIntroStep from '@/app/intake/steps/SleepIntroStep';
 import CECStep from '@/app/intake/steps/CECStep';
 import MetabolicStep from '@/app/intake/steps/MetabolicStep';
 import ISIStep from '@/app/intake/steps/ISIStep';
+import ReviewStep from '@/app/intake/steps/ReviewStep';
+import ReviewPrepareStep from '@/app/intake/steps/ReviewPrepareStep';
+import { computeSdsPreview } from '@/lib/intake/sleep';
+import { useIsiGate } from '@/app/intake/hooks/useIsiGate';
+import { useAvatarActions } from '@/app/intake/hooks/useAvatarActions';
+import { usePreparedRecaps, generateSectionRecap } from '@/app/intake/hooks/useRecapTriggers';
  
 
 export type Step = {
   id: string;
   title: string;
   description?: string;
-  type: 'singleSelect' | 'contact' | 'areas_select' | 'topic_rate' | 'slider' | 'text' | 'deep_dive' | 'daily' | 'sleep_intro' | 'sleep_short' | 'cec' | 'metabolic' | 'isi' | 'review';
+  type: 'singleSelect' | 'contact' | 'areas_select' | 'topic_rate' | 'slider' | 'text' | 'deep_dive' | 'daily' | 'sleep_intro' | 'sleep_short' | 'cec' | 'metabolic' | 'isi' | 'review_prepare' | 'review';
   field: string; // dot path in payload
   scale?: '0-10'|'1-5'|'minutes';
   meta?: Record<string, any>;
@@ -56,10 +66,8 @@ const getByPath = getByPathLib;
 const getGuidance = getGuidanceLib;
 
 export default function Flow() {
-  const [payload, setPayload] = useState<Record<string, any>>({});
+  const { payload, setPayload, saving, toast, autosave, updateField, payloadRef, generateIntakeIdFrom } = useAutosavePayload({});
   const [stepIdx, setStepIdx] = useState(0);
-  const [saving, setSaving] = useState(false);
-  const [toast, setToast] = useState<string>('');
   const [loadingIntake, setLoadingIntake] = useState<boolean>(true);
 
   const dbg = useCallback((..._args: any[]) => {}, []);
@@ -71,30 +79,8 @@ export default function Flow() {
 
   const topicPromptFallback: Record<string, string> = {};
 
-  // Dynamic steps based on selected topics
   const selected = payload.areas?.selected ?? [];
-  const topicSteps: Step[] = useMemo(() => selected.map((topicId: string) => ({
-    id: `topic_${topicId}`,
-    title: `Rate: ${topics.find(t=>t.id===topicId)?.label ?? topicId}`,
-    description: '1 = mild · 5 = severe',
-    type: 'topic_rate',
-    field: 'areas',
-    meta: { topicId }
-  })), [selected]);
-  const steps: Step[] = useMemo<Step[]>(() => [
-    baseSteps[0],
-    baseSteps[1],
-    baseSteps[2],
-    ...topicSteps,
-    { id:'deep_dive', title:'Quick zoom-in', description:'0 = not at all · 10 = severe', type:'deep_dive', field:'deepdive' },
-    { id:'daily',       title:'Daily habits & health', type:'daily', field:'daily' },
-    { id:'sleep_intro', title:'Sleep context', description:'Why sleep matters for your map', type:'sleep_intro', field:'sleep_intro' },
-    { id:'sleep_short', title:'Sleep habits', type:'sleep_short', field:'sleep' },
-    { id:'cec',         title:'CEC questionnaire', type:'cec', field:'cec' },
-    { id:'metabolic',   title:'Metabolic', type:'metabolic', field:'metabolic' },
-    { id:'isi',         title:'Insomnia Severity Index', type:'isi', field:'isi' },
-    { id:'review',      title:'Review & submit', type:'review', field:'review' },
-  ], [selected]);
+  const steps: Step[] = useMemo<Step[]>(() => buildSteps(selected, topics), [selected, topics]);
 
   const current = steps[stepIdx];
   // On mount, attempt to load existing intake tied to current auth email
@@ -143,8 +129,6 @@ export default function Flow() {
   const isTypingRef = useRef<boolean>(false);
   const typingResetTimer = useRef<any>(null);
   const hydratedRef = useRef<boolean>(false);
-  const payloadRef = useRef<Record<string, any>>({});
-  useEffect(() => { payloadRef.current = payload; }, [payload]);
   // Track last visited step in payload.progress.last_step for accurate resume
   useEffect(() => {
     try {
@@ -161,99 +145,9 @@ export default function Flow() {
     } catch {}
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current?.id]);
-  // Handle avatar actions dispatched from ContactStep
-  useEffect(() => {
-    function onUpload(ev: any) {
-      const file: File | undefined = ev?.detail?.file;
-      if (!file) return;
-      const id = payloadRef.current?.intakeId || generateIntakeIdFrom(payloadRef.current);
-      uploadProfile(file, id).then((res:any)=>{
-        const url = String(res?.url || '');
-        if (!url) return;
-        const next = structuredClone(payloadRef.current || {});
-        next.intakeId = id;
-        next.profile = { ...(next.profile||{}), photo_url: url };
-        setPayload(next);
-        autosave(next, { immediate: true, silent: true });
-      }).catch(()=>{});
-    }
-    function onGenerate() {
-      const id = payloadRef.current?.intakeId || generateIntakeIdFrom(payloadRef.current);
-      generateAbstractAvatar(id).then((res:any)=>{
-        const url = String(res?.url || '');
-        if (!url) return;
-        const next = structuredClone(payloadRef.current || {});
-        next.intakeId = id;
-        next.profile = { ...(next.profile||{}), photo_url: url };
-        setPayload(next);
-        autosave(next, { immediate: true, silent: true });
-      }).catch(()=>{});
-    }
-    try {
-      window.addEventListener('request-upload-photo', onUpload as any);
-      window.addEventListener('request-generate-avatar', onGenerate as any);
-      return () => {
-        window.removeEventListener('request-upload-photo', onUpload as any);
-        window.removeEventListener('request-generate-avatar', onGenerate as any);
-      };
-    } catch { return; }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  useAvatarActions({ payloadRef, setPayload, autosave, generateIntakeIdFrom, uploadProfile, generateAbstractAvatar });
 
-  // autosave on payload change (debounced)
-  const timer = useRef<NodeJS.Timeout | null>(null);
-  const lastOptsRef = useRef<{ silent?: boolean }>({});
-  function generateIntakeIdFrom(next: any): string {
-    const fi = (next?.profile?.first_name || '').trim().charAt(0).toLowerCase() || 'x';
-    const li = (next?.profile?.last_name || '').trim().charAt(0).toLowerCase() || 'x';
-    const rand = Math.floor(100000 + Math.random()*900000).toString();
-    return `${fi}${li}${rand}`;
-  }
-  const autosave = useCallback((next: Record<string, any>, opts?: { silent?: boolean; immediate?: boolean }) => {
-    const doSave = async (snapshotIn: Record<string, any>) => {
-      // allow save even during hydration if user interacts; we only guard if nothing is loaded and no edits
-      const snapshot = { ...(snapshotIn as any) } as any;
-      if (!snapshot.intakeId) {
-        snapshot.intakeId = generateIntakeIdFrom(snapshot);
-        setPayload((prev) => prev?.intakeId ? prev : ({ ...prev, intakeId: snapshot.intakeId }));
-      }
-      setSaving(true);
-      try {
-        const res = await fetch('/api/intake-save', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ practiceId: devPracticeId, clientId: devClientId, intakeId: snapshot?.intakeId, payload: snapshot })
-        });
-        if (!res.ok) {
-          console.error('intake-save failed', await res.text());
-        }
-        if (res.ok && !(opts?.silent)) {
-          setToast('Saved ✓');
-          setTimeout(()=>setToast(''), 1200);
-        }
-      } finally {
-        setSaving(false);
-      }
-    };
-
-    if (opts?.immediate) {
-      if (timer.current) clearTimeout(timer.current);
-      void doSave(next);
-      return;
-    }
-
-    if (timer.current) clearTimeout(timer.current);
-    lastOptsRef.current = opts || {};
-    const snapshot = { ...next } as any;
-    timer.current = setTimeout(() => { void doSave(snapshot); }, 900);
-  }, []);
-
-  function updateField(path: string, value: any) {
-    const next = structuredClone(payload);
-    setByPath(next, path, value);
-    setPayload(next);
-    autosave(next);
-    dbg('updateField', { path, value });
-  }
+  // autosave + updateField moved to useAutosavePayload hook
 
   function setDeepDive(topicId: string, itemKey: string, val: number) {
     const next = structuredClone(payload);
@@ -438,6 +332,8 @@ export default function Flow() {
 
   useEffect(() => {}, [current?.id]);
 
+  usePreparedRecaps({ payloadRef, steps, setStepIdx, setPayload, autosave });
+
   // When entering deep_dive, handle skip if no queue; reset ddIndex
   useEffect(() => {
     if (current?.type !== 'deep_dive') return;
@@ -451,54 +347,7 @@ export default function Flow() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current?.type]);
 
-  // Auto-skip ISI if under 18 or if short-sleep answers look healthy
-  useEffect(() => {
-    if (current?.type !== 'isi') return;
-    try {
-      const bd = (payload?.profile?.birthdate || '').toString();
-      if (!bd) return;
-      const today = new Date();
-      const bdt = new Date(bd);
-      let age = today.getFullYear() - bdt.getFullYear();
-      const m = today.getMonth() - bdt.getMonth();
-      if (m < 0 || (m === 0 && today.getDate() < bdt.getDate())) age--;
-      if (age < 18) { nextStep(); return; }
-      const sleep = payload?.sleep || {};
-      const sol = Number(sleep?.sleep_latency_minutes);
-      const wakes = Number(sleep?.night_awakenings_count);
-      const waso = Number(sleep?.awake_time_at_night_minutes);
-      const rested = Number(sleep?.rested_on_waking_0to10);
-      // efficiency from derived metrics in SleepShortStep (if present). If not, compute best-effort.
-      const bed = (sleep?.bedtime || '').toString();
-      const wake = (sleep?.wake_time || '').toString();
-      const parseM = (t:string)=>{ try { const [hh,mm]=t.split(':').map(n=>parseInt(n,10)); if(Number.isNaN(hh)||Number.isNaN(mm)) return null; return hh*60+mm; } catch { return null; } };
-      const bedM = parseM(bed); const wakeM = parseM(wake);
-      let timeInBed: number | null = null; if (bedM!=null && wakeM!=null) timeInBed = (wakeM>=bedM)?(wakeM-bedM):(24*60-bedM+wakeM);
-      const totalSleep = (timeInBed!=null && !Number.isNaN(sol) && !Number.isNaN(waso)) ? Math.max(0, timeInBed - sol - waso) : null;
-      const eff = (timeInBed!=null && totalSleep!=null && timeInBed>0) ? Math.round((totalSleep/timeInBed)*100) : NaN;
-
-      const score =
-        (Number.isNaN(sol)?0:(sol<20?0:sol<30?1:sol<45?2:sol<60?3:4)) +
-        (Number.isNaN(wakes)?0:(wakes<=1?0:wakes===2?1:wakes===3?2:wakes===4?3:4)) +
-        (Number.isNaN(waso)?0:(waso<20?0:waso<30?1:waso<45?2:waso<60?3:4)) +
-        (Number.isNaN(rested)?0:(rested>=8?0:rested>=6?1:rested>=4?2:rested>=2?3:4)) +
-        (Number.isNaN(eff)?0:(eff>=90?0:eff>=85?1:eff>=80?2:eff>=75?3:4)) +
-        ((sleep?.flags && Object.keys(sleep.flags||{}).length>=2)?1:0);
-
-      const majorHits = [
-        (!Number.isNaN(sol) && sol>=30),
-        (!Number.isNaN(waso) && waso>=30),
-        (!Number.isNaN(wakes) && wakes>=3),
-        (!Number.isNaN(eff) && eff<85),
-      ].filter(Boolean).length;
-      const majorOverride = (majorHits>=2) || (!Number.isNaN(rested) && rested<=4 && ((!Number.isNaN(sol) && sol>=30) || (!Number.isNaN(wakes) && wakes>=3)));
-
-      // Thresholds: 0–3 no ISI; 4–7 optional; >=8 require (age checked above)
-      if (majorOverride) return; // keep ISI
-      if (score <= 3) { nextStep(); return; }
-    } catch {}
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current?.type]);
+  useIsiGate({ currentType: current?.type, payload, nextStep });
 
   // Keep topic note local state in sync when topic changes
   useEffect(() => {
@@ -537,61 +386,13 @@ export default function Flow() {
             <ContactStep profile={profile} onDraft={(p)=>{ (contactDraftRef as any).current = p; }} />
           )}
 
-          {current.type === 'topic_rate' && (() => {
-            const topicId = current.meta?.topicId as string;
-            const tLabel = topics.find(x=>x.id===topicId)?.label || topicId;
-            const tSeverity = severities?.[topicId] ?? 0;
-            const note: string = getByPath(payload, `notes.byTopic.${topicId}`) ?? '';
-            const { chips } = getGuidance(topicId, tSeverity || 0);
-            return (
-              <TopicRateStep
-                topicLabel={tLabel}
-                severity={tSeverity}
-                setSeverity={(n)=>setSeverity(topicId, n)}
-                note={note}
-                chips={chips}
-                onSave={(text)=>{ const next=structuredClone(payload); setByPath(next, `notes.byTopic.${topicId}`, text); setPayload(next); autosave(next,{silent:true}); topicNoteLatestRef.current = text; }}
-                onLiveChange={(text)=>{ topicNoteLatestRef.current = text; }}
-                onComplete={(text)=>{ const next=structuredClone(payload); setByPath(next, `notes.byTopic.${topicId}`, text); setPayload(next); autosave(next,{immediate:true,silent:true}); setLastAssistant(text?`You noted: ${text.slice(0,180)}${text.length>180?'…':''}`:''); nextStep(); }}
-              />
-            );
-          })()}
+          {current.type === 'topic_rate' && (
+            <TopicRateContainer payload={payload} setPayload={setPayload} autosave={autosave} topics={topics} topicId={current.meta?.topicId as string} />
+          )}
 
-          {current.type === 'deep_dive' && (() => {
-            const q: string[] = payload?.queues?.deepDive ?? [];
-            if (!Array.isArray(q) || q.length === 0) return null;
-            const topicId = q[Math.max(0, Math.min(ddIndex, q.length - 1))];
-            const topicLabel = topics.find(t=>t.id===topicId)?.label || topicId;
-            // Merge live draft values for smooth, continuous slider control
-            const values: Record<string, number> = Object.fromEntries(
-              (DEEP_ITEMS[topicId]||[]).map(it => {
-                const ddKey = `${topicId}.${it.key}`;
-                const draft = ddDraft[ddKey];
-                const persisted = Number(getByPath(payload, `deepdive.${topicId}.${it.key}`) ?? 0);
-                return [it.key, typeof draft === 'number' ? draft : persisted];
-              })
-            );
-            const whyVals: Record<string, string> = Object.fromEntries(
-              (DEEP_ITEMS[topicId]||[]).map(it => {
-                const ddKey = `${topicId}.${it.key}`;
-                const draft = ddWhyDraft[ddKey];
-                const persisted = String(getByPath(payload, `deepdive_meta.${topicId}.${it.key}.why`) ?? '');
-                return [it.key, typeof draft === 'string' ? draft : persisted];
-              })
-            );
-            return (
-              <DeepDiveStep
-                topicId={topicId}
-                topicLabel={topicLabel}
-                values={values}
-                onChange={(itemKey,n)=>{ const ddKey=`${topicId}.${itemKey}`; setDdDraft((d)=>({ ...d, [ddKey]: n })); }}
-                onCommit={(itemKey,n)=>{ setDeepDive(topicId, itemKey, n); const ddKey=`${topicId}.${itemKey}`; setDdDraft((d)=>({ ...d, [ddKey]: n })); }}
-                why={whyVals}
-                onWhyChange={(itemKey,t)=>{ const ddKey=`${topicId}.${itemKey}`; setDdWhyDraft((m)=>({ ...m, [ddKey]: t })); }}
-                onWhyCommit={(itemKey,t)=>{ const next=structuredClone(payload); setByPath(next, `deepdive_meta.${topicId}.${itemKey}.why`, (t||'').trim()); setPayload(next); autosave(next,{silent:true}); }}
-              />
-            );
-          })()}
+          {current.type === 'deep_dive' && (
+            <DeepDiveContainer payload={payload} topics={topics} setPayload={setPayload} autosave={autosave} />
+          )}
 
           {current.id === 'sleep_intro' && (
             <div className="grid gap-4">
@@ -628,35 +429,12 @@ export default function Flow() {
           )}
 
           {current.type === 'sleep_short' && (()=>{
-            // Compute SDS + preview reason synchronously for display
             const sleep = payload?.sleep || {};
-            const sol = Number(sleep?.sleep_latency_minutes);
-            const wakes = Number(sleep?.night_awakenings_count);
-            const waso = Number(sleep?.awake_time_at_night_minutes);
-            const rested = Number(sleep?.rested_on_waking_0to10);
-            const parseM = (t:string)=>{ try { const [hh,mm]=t.split(':').map(n=>parseInt(n,10)); if(Number.isNaN(hh)||Number.isNaN(mm)) return null; return hh*60+mm; } catch { return null; } };
-            const bedM = parseM(String(sleep?.bedtime||'')); const wakeM = parseM(String(sleep?.wake_time||''));
-            let timeInBed: number | null = null; if (bedM!=null && wakeM!=null) timeInBed = (wakeM>=bedM)?(wakeM-bedM):(24*60-bedM+wakeM);
-            const totalSleep = (timeInBed!=null && !Number.isNaN(sol) && !Number.isNaN(waso)) ? Math.max(0, timeInBed - sol - waso) : null;
-            const eff = (timeInBed!=null && totalSleep!=null && timeInBed>0) ? Math.round((totalSleep/timeInBed)*100) : NaN;
-            const score =
-              (Number.isNaN(sol)?0:(sol<20?0:sol<30?1:sol<45?2:sol<60?3:4)) +
-              (Number.isNaN(wakes)?0:(wakes<=1?0:wakes===2?1:wakes===3?2:wakes===4?3:4)) +
-              (Number.isNaN(waso)?0:(waso<20?0:waso<30?1:waso<45?2:waso<60?3:4)) +
-              (Number.isNaN(rested)?0:(rested>=8?0:rested>=6?1:rested>=4?2:rested>=2?3:4)) +
-              (Number.isNaN(eff)?0:(eff>=90?0:eff>=85?1:eff>=80?2:eff>=75?3:4)) +
-              ((sleep?.flags && Object.keys(sleep.flags||{}).length>=2)?1:0);
-            const majorHits = [ (!Number.isNaN(sol) && sol>=30), (!Number.isNaN(waso) && waso>=30), (!Number.isNaN(wakes) && wakes>=3), (!Number.isNaN(eff) && eff<85) ].filter(Boolean).length;
-            const majorOverride = (majorHits>=2) || (!Number.isNaN(rested) && rested<=4 && ((!Number.isNaN(sol) && sol>=30) || (!Number.isNaN(wakes) && wakes>=3)));
-            let wouldShow = true; let level: 'skip'|'optional'|'require' = 'optional';
-            if (score <= 3 && !majorOverride) { wouldShow = false; level = 'skip'; }
-            else if (score >= 8) { wouldShow = true; level = 'require'; }
-            else { wouldShow = true; level = 'optional'; }
-            const reason = !wouldShow ? 'SDS ≤ 3 with no major red flags.' : (level==='require' ? 'SDS ≥ 8 or major override triggered.' : 'SDS 4–7 (mild disturbance).');
+            const preview = computeSdsPreview(sleep);
             return (
             <SleepShortStep
               sleep={sleep}
-              isiPreview={{ wouldShow, level, reason }}
+              isiPreview={preview}
               update={(rel, val)=>{
                 const next = structuredClone(payload);
                 if (rel === 'flags') {
@@ -719,16 +497,32 @@ export default function Flow() {
             />
           )}
 
-          {current.type === 'review' && (
-            <div className="grid gap-4">
-              <div className="text-sm text-muted-foreground">Review & submit — coming soon.</div>
-              <div>
-                <GlowButton onClick={async ()=>{ await markComplete(); setFinished(true); }} disabled={finished}>Finish</GlowButton>
-              </div>
-            </div>
+          {current.id === 'review_prepare' && (
+            <ReviewPrepareStep
+              payload={payload}
+              onBack={prevStep}
+              onReady={()=>{ try { const idx=steps.findIndex(s=>s.id==='review'); if(idx>=0) setStepIdx(idx); } catch {} }}
+            />
           )}
 
-          {current.type === 'text' && (
+          {current.type === 'review' && (
+            <>
+              <ReviewStep
+                recaps={payload?.recaps || {}}
+                loadingSection={null}
+                onEdit={(section)=>{
+                  const idx = steps.findIndex(s => s.field === section || s.id === section);
+                  if (idx >= 0) setStepIdx(idx);
+                }}
+              />
+              <div className="flex items-center gap-3 pt-4">
+                <Button variant="outline" onClick={prevStep}>Back</Button>
+                <GlowButton tone="soft" onClick={async ()=>{ await markComplete(); setFinished(true); }}>Submit to your provider</GlowButton>
+              </div>
+            </>
+          )}
+
+          {current.type === 'text' && current.id !== 'review_prepare' && (
             <textarea
               className="w-full min-h-[140px] rounded-md border p-3 text-base"
               placeholder="Type here"
@@ -749,7 +543,7 @@ export default function Flow() {
               <div className="text-sm text-muted-foreground">Value: {Math.round(getByPath(payload, current.field) ?? 0)}</div>
             </div>
           )}
-          {current.id !== 'sleep_intro' && (
+          {current.id !== 'sleep_intro' && current.id !== 'review_prepare' && current.type !== 'review' && (
           <FooterNav
             onBack={() => {
               if (current.type === 'deep_dive') {
@@ -800,12 +594,15 @@ export default function Flow() {
                 setPayload(next);
                 autosave(next, { immediate: true, silent: true });
               }
+              // Trigger recap generation for completed section
+              void generateSectionRecap({ currentField: current.field, profileFirstName: profile?.first_name, payloadRef, setPayload, autosave });
               nextStep();
             }}
             backDisabled={stepIdx===0}
             nextDisabled={false}
             saving={saving}
             toast={toast}
+            nextLabel={'Next'}
           />
           )}
         </CardContent>
