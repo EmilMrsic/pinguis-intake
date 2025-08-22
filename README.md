@@ -77,6 +77,14 @@ npm run dev
 - Contact: overlapping top-right avatar with Upload/Generate; seeds from auth photo; autosaves.
 - Daily: meds/supps multi-select chips with dropdown suggestions; saves immediately; Complicating factors store only selected entries (unchecked deletes key). "Continue" jumps to last relevant saved step.
 
+## Recent updates
+
+- Sleep Short: numeric steppers for minutes/counts, derived TST/efficiency (hidden), and SDS gating for ISI.
+- ISI: optional for 18+, one-question-per-screen, alternating backgrounds, icon back arrow, auto-advance.
+- CEC: icon-only back arrow; removed sub-question counter.
+- Metabolic caffeine: simplified to single-select + context; clears old AI fields.
+- Friendly footer copy and improved resume behavior.
+
 ## Release notes (2025-xx-xx)
 
 - Simplified TopicRate UX: one-line guidance + ≤3 chips, compact textarea (auto-expands), Enter-to-advance.

@@ -1,0 +1,19 @@
+Build snapshot 2025-08-22
+
+Node: see package.json engines
+Command: npm run build
+Result: success
+
+Key routes:
+- /intake — app router client
+- /api/intake-load — ok
+- /api/intake-save — ok
+- /api/caffeine-estimate — ok
+- /api/meds-suggest — ok
+- /api/supps-suggest — ok
+
+Notes:
+- Updated Sleep Short + ISI gating and UI.
+- ISI implemented with single-question paging.
+- Friendly footer copy.
+

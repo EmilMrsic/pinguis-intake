@@ -45,7 +45,8 @@
 .is-selected::before,
 .is-selected::after {
   opacity: 1;
-  animation: spin 2.2s linear infinite;
+  /* stop spin; keep ring stable */
+  animation: none;
 }
 
 /* Sharper, brighter edge without filling interior */

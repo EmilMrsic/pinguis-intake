@@ -27,13 +27,18 @@ import { DEEP_ITEMS as DEEP_ITEMS_CONST } from '@/lib/intake/deepItems';
 import { getGuidance as getGuidanceLib } from '@/lib/intake/guidance';
 import { uploadProfile, generateAbstractAvatar } from '@/lib/intake/intakeApi';
 import { setByPath as setByPathLib, getByPath as getByPathLib } from '@/lib/intake/paths';
+import SleepShortStep from '@/app/intake/steps/SleepShortStep';
+import SleepIntroStep from '@/app/intake/steps/SleepIntroStep';
+import CECStep from '@/app/intake/steps/CECStep';
+import MetabolicStep from '@/app/intake/steps/MetabolicStep';
+import ISIStep from '@/app/intake/steps/ISIStep';
  
 
 export type Step = {
   id: string;
   title: string;
   description?: string;
-  type: 'singleSelect' | 'contact' | 'areas_select' | 'topic_rate' | 'slider' | 'text' | 'deep_dive' | 'daily' | 'sleep_short' | 'cec' | 'metabolic' | 'isi' | 'review';
+  type: 'singleSelect' | 'contact' | 'areas_select' | 'topic_rate' | 'slider' | 'text' | 'deep_dive' | 'daily' | 'sleep_intro' | 'sleep_short' | 'cec' | 'metabolic' | 'isi' | 'review';
   field: string; // dot path in payload
   scale?: '0-10'|'1-5'|'minutes';
   meta?: Record<string, any>;
@@ -83,10 +88,11 @@ export default function Flow() {
     ...topicSteps,
     { id:'deep_dive', title:'Quick zoom-in', description:'0 = not at all · 10 = severe', type:'deep_dive', field:'deepdive' },
     { id:'daily',       title:'Daily habits & health', type:'daily', field:'daily' },
-    { id:'sleep_short', title:'Sleep (short form)', type:'sleep_short', field:'sleep' },
+    { id:'sleep_intro', title:'Sleep context', description:'Why sleep matters for your map', type:'sleep_intro', field:'sleep_intro' },
+    { id:'sleep_short', title:'Sleep habits', type:'sleep_short', field:'sleep' },
     { id:'cec',         title:'CEC questionnaire', type:'cec', field:'cec' },
     { id:'metabolic',   title:'Metabolic', type:'metabolic', field:'metabolic' },
-    { id:'isi',         title:'Insomnia Severity Index (18+)', type:'isi', field:'isi' },
+    { id:'isi',         title:'Insomnia Severity Index', type:'isi', field:'isi' },
     { id:'review',      title:'Review & submit', type:'review', field:'review' },
   ], [selected]);
 
@@ -139,6 +145,22 @@ export default function Flow() {
   const hydratedRef = useRef<boolean>(false);
   const payloadRef = useRef<Record<string, any>>({});
   useEffect(() => { payloadRef.current = payload; }, [payload]);
+  // Track last visited step in payload.progress.last_step for accurate resume
+  useEffect(() => {
+    try {
+      const curId = current?.id;
+      if (!curId) return;
+      // Do not overwrite resume target while user is still on the initial screen
+      if (curId === steps[0]?.id) return;
+      const last = payloadRef.current?.progress?.last_step;
+      if (last === curId) return;
+      const next = structuredClone(payloadRef.current || {});
+      next.progress = { ...(next.progress||{}), last_step: curId };
+      setPayload(next);
+      autosave(next, { silent: true });
+    } catch {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.id]);
   // Handle avatar actions dispatched from ContactStep
   useEffect(() => {
     function onUpload(ev: any) {
@@ -274,6 +296,12 @@ export default function Flow() {
   // Jump to last saved screen (best-effort heuristic)
   function jumpToLastSaved() {
     try {
+      // Resume to explicitly tracked last_step if valid
+      const lastStepId: string | undefined = payload?.progress?.last_step;
+      if (lastStepId) {
+        const idx = steps.findIndex(s => s.id === lastStepId);
+        if (idx >= 0) { setStepIdx(idx); return; }
+      }
       // If deep-dive queue exists and has values, prefer deep_dive
       const q: string[] = payload?.queues?.deepDive ?? [];
       if (Array.isArray(q) && q.length > 0) {
@@ -291,7 +319,7 @@ export default function Flow() {
         const idx = steps.findIndex(s => s.id === `topic_${lastTopic}`);
         if (idx >= 0) { setStepIdx(idx); return; }
       }
-      // Otherwise if contact incomplete, go there; otherwise daily
+      // Otherwise if contact incomplete, go there; otherwise land on Daily (right before Sleep)
       const needContact = !(((profile.first_name||'').trim()) && ((profile.last_name||'').trim()) && ((profile.email||'').trim()));
       if (needContact) { setStepIdx(1); return; }
       const dailyIdx = steps.findIndex(s => s.id === 'daily');
@@ -423,7 +451,7 @@ export default function Flow() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current?.type]);
 
-  // Auto-skip ISI if under 18
+  // Auto-skip ISI if under 18 or if short-sleep answers look healthy
   useEffect(() => {
     if (current?.type !== 'isi') return;
     try {
@@ -434,7 +462,40 @@ export default function Flow() {
       let age = today.getFullYear() - bdt.getFullYear();
       const m = today.getMonth() - bdt.getMonth();
       if (m < 0 || (m === 0 && today.getDate() < bdt.getDate())) age--;
-      if (age < 18) nextStep();
+      if (age < 18) { nextStep(); return; }
+      const sleep = payload?.sleep || {};
+      const sol = Number(sleep?.sleep_latency_minutes);
+      const wakes = Number(sleep?.night_awakenings_count);
+      const waso = Number(sleep?.awake_time_at_night_minutes);
+      const rested = Number(sleep?.rested_on_waking_0to10);
+      // efficiency from derived metrics in SleepShortStep (if present). If not, compute best-effort.
+      const bed = (sleep?.bedtime || '').toString();
+      const wake = (sleep?.wake_time || '').toString();
+      const parseM = (t:string)=>{ try { const [hh,mm]=t.split(':').map(n=>parseInt(n,10)); if(Number.isNaN(hh)||Number.isNaN(mm)) return null; return hh*60+mm; } catch { return null; } };
+      const bedM = parseM(bed); const wakeM = parseM(wake);
+      let timeInBed: number | null = null; if (bedM!=null && wakeM!=null) timeInBed = (wakeM>=bedM)?(wakeM-bedM):(24*60-bedM+wakeM);
+      const totalSleep = (timeInBed!=null && !Number.isNaN(sol) && !Number.isNaN(waso)) ? Math.max(0, timeInBed - sol - waso) : null;
+      const eff = (timeInBed!=null && totalSleep!=null && timeInBed>0) ? Math.round((totalSleep/timeInBed)*100) : NaN;
+
+      const score =
+        (Number.isNaN(sol)?0:(sol<20?0:sol<30?1:sol<45?2:sol<60?3:4)) +
+        (Number.isNaN(wakes)?0:(wakes<=1?0:wakes===2?1:wakes===3?2:wakes===4?3:4)) +
+        (Number.isNaN(waso)?0:(waso<20?0:waso<30?1:waso<45?2:waso<60?3:4)) +
+        (Number.isNaN(rested)?0:(rested>=8?0:rested>=6?1:rested>=4?2:rested>=2?3:4)) +
+        (Number.isNaN(eff)?0:(eff>=90?0:eff>=85?1:eff>=80?2:eff>=75?3:4)) +
+        ((sleep?.flags && Object.keys(sleep.flags||{}).length>=2)?1:0);
+
+      const majorHits = [
+        (!Number.isNaN(sol) && sol>=30),
+        (!Number.isNaN(waso) && waso>=30),
+        (!Number.isNaN(wakes) && wakes>=3),
+        (!Number.isNaN(eff) && eff<85),
+      ].filter(Boolean).length;
+      const majorOverride = (majorHits>=2) || (!Number.isNaN(rested) && rested<=4 && ((!Number.isNaN(sol) && sol>=30) || (!Number.isNaN(wakes) && wakes>=3)));
+
+      // Thresholds: 0–3 no ISI; 4–7 optional; >=8 require (age checked above)
+      if (majorOverride) return; // keep ISI
+      if (score <= 3) { nextStep(); return; }
     } catch {}
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current?.type]);
@@ -458,7 +519,9 @@ export default function Flow() {
       <Glow>
       <Card className="relative">
         <CardHeader>
-          <StepHeader title={current.title} description={current.description} showWelcome={stepIdx===0 && !!payload?.intakeId} firstName={profile?.first_name} onContinue={jumpToLastSaved} />
+          {current.id !== 'sleep_intro' && (
+            <StepHeader title={current.title} description={current.description} showWelcome={stepIdx===0 && !!payload?.intakeId} firstName={profile?.first_name} onContinue={jumpToLastSaved} />
+          )}
         </CardHeader>
         <CardContent className="space-y-6">
           {/* AI header removed for simplicity */}
@@ -530,6 +593,17 @@ export default function Flow() {
             );
           })()}
 
+          {current.id === 'sleep_intro' && (
+            <div className="grid gap-4">
+              <SleepIntroStep payload={payload} />
+              <div className="flex items-center gap-3 pt-2">
+                <Button variant="outline" onClick={prevStep}>Back</Button>
+                <GlowButton onClick={nextStep}>Answer a few quick questions about your sleep</GlowButton>
+                <div className="sm:ml-auto text-sm text-muted-foreground" aria-live="polite">{saving ? 'Saving…' : toast || 'Saved'}</div>
+              </div>
+            </div>
+          )}
+
           {current.type === 'daily' && (
             <DailyStep
               intakeId={payload?.intakeId}
@@ -553,28 +627,96 @@ export default function Flow() {
             />
           )}
 
-          {current.type === 'sleep_short' && (
-            <div className="grid gap-4">
-              <div className="text-sm text-muted-foreground">Short sleep form — coming soon.</div>
-            </div>
-          )}
+          {current.type === 'sleep_short' && (()=>{
+            // Compute SDS + preview reason synchronously for display
+            const sleep = payload?.sleep || {};
+            const sol = Number(sleep?.sleep_latency_minutes);
+            const wakes = Number(sleep?.night_awakenings_count);
+            const waso = Number(sleep?.awake_time_at_night_minutes);
+            const rested = Number(sleep?.rested_on_waking_0to10);
+            const parseM = (t:string)=>{ try { const [hh,mm]=t.split(':').map(n=>parseInt(n,10)); if(Number.isNaN(hh)||Number.isNaN(mm)) return null; return hh*60+mm; } catch { return null; } };
+            const bedM = parseM(String(sleep?.bedtime||'')); const wakeM = parseM(String(sleep?.wake_time||''));
+            let timeInBed: number | null = null; if (bedM!=null && wakeM!=null) timeInBed = (wakeM>=bedM)?(wakeM-bedM):(24*60-bedM+wakeM);
+            const totalSleep = (timeInBed!=null && !Number.isNaN(sol) && !Number.isNaN(waso)) ? Math.max(0, timeInBed - sol - waso) : null;
+            const eff = (timeInBed!=null && totalSleep!=null && timeInBed>0) ? Math.round((totalSleep/timeInBed)*100) : NaN;
+            const score =
+              (Number.isNaN(sol)?0:(sol<20?0:sol<30?1:sol<45?2:sol<60?3:4)) +
+              (Number.isNaN(wakes)?0:(wakes<=1?0:wakes===2?1:wakes===3?2:wakes===4?3:4)) +
+              (Number.isNaN(waso)?0:(waso<20?0:waso<30?1:waso<45?2:waso<60?3:4)) +
+              (Number.isNaN(rested)?0:(rested>=8?0:rested>=6?1:rested>=4?2:rested>=2?3:4)) +
+              (Number.isNaN(eff)?0:(eff>=90?0:eff>=85?1:eff>=80?2:eff>=75?3:4)) +
+              ((sleep?.flags && Object.keys(sleep.flags||{}).length>=2)?1:0);
+            const majorHits = [ (!Number.isNaN(sol) && sol>=30), (!Number.isNaN(waso) && waso>=30), (!Number.isNaN(wakes) && wakes>=3), (!Number.isNaN(eff) && eff<85) ].filter(Boolean).length;
+            const majorOverride = (majorHits>=2) || (!Number.isNaN(rested) && rested<=4 && ((!Number.isNaN(sol) && sol>=30) || (!Number.isNaN(wakes) && wakes>=3)));
+            let wouldShow = true; let level: 'skip'|'optional'|'require' = 'optional';
+            if (score <= 3 && !majorOverride) { wouldShow = false; level = 'skip'; }
+            else if (score >= 8) { wouldShow = true; level = 'require'; }
+            else { wouldShow = true; level = 'optional'; }
+            const reason = !wouldShow ? 'SDS ≤ 3 with no major red flags.' : (level==='require' ? 'SDS ≥ 8 or major override triggered.' : 'SDS 4–7 (mild disturbance).');
+            return (
+            <SleepShortStep
+              sleep={sleep}
+              isiPreview={{ wouldShow, level, reason }}
+              update={(rel, val)=>{
+                const next = structuredClone(payload);
+                if (rel === 'flags') {
+                  const cleaned = Object.fromEntries(Object.entries(val||{}).filter(([_,v])=>!!v));
+                  if (Object.keys(cleaned).length === 0) {
+                    try { if (next.sleep && typeof next.sleep === 'object') delete next.sleep.flags; } catch {}
+                  } else {
+                    setByPath(next, 'sleep.flags', cleaned);
+                  }
+                } else {
+                  setByPath(next, `sleep.${rel}`, val);
+                }
+                setPayload(next);
+                autosave(next, { immediate: true });
+              }}
+            />
+            );})()}
 
           {current.type === 'cec' && (
-            <div className="grid gap-4">
-              <div className="text-sm text-muted-foreground">CEC questionnaire — coming soon.</div>
-            </div>
+            <CECStep
+              values={payload?.cec || {}}
+              update={(id, v)=>{ const next=structuredClone(payload); setByPath(next, `cec.${id}`, v); setPayload(next); autosave(next,{silent:true}); }}
+              onComplete={()=> nextStep()}
+            />
           )}
 
           {current.type === 'metabolic' && (
-            <div className="grid gap-4">
-              <div className="text-sm text-muted-foreground">Metabolic — coming soon.</div>
-            </div>
+            <MetabolicStep
+              metabolic={payload?.metabolic || {}}
+              firstName={profile?.first_name}
+              update={(rel,val)=>{ 
+                const next=structuredClone(payload);
+                if (rel === 'caffeine_clear') {
+                  try {
+                    if (next.metabolic && typeof next.metabolic === 'object') {
+                      delete next.metabolic.caffeine_text;
+                      delete next.metabolic.caffeine_followup;
+                      delete next.metabolic.caffeine_choice;
+                      delete next.metabolic.caffeine_choice_multi;
+                      delete next.metabolic.daily_caffeine_amount;
+                      delete next.metabolic.daily_caffeine_mg;
+                      delete next.metabolic.caffeine_simple;
+                      delete next.metabolic.caffeine_context;
+                    }
+                  } catch {}
+                } else {
+                  setByPath(next, `metabolic.${rel}`, val);
+                }
+                setPayload(next);
+                autosave(next,{silent:true});
+              }}
+            />
           )}
 
           {current.type === 'isi' && (
-            <div className="grid gap-4">
-              <div className="text-sm text-muted-foreground">Insomnia Severity Index — coming soon.</div>
-            </div>
+            <ISIStep
+              values={payload?.isi || {}}
+              update={(id,v)=>{ const next=structuredClone(payload); setByPath(next, `isi.${id}`, v); setPayload(next); autosave(next,{silent:true}); }}
+              onComplete={()=> nextStep()}
+            />
           )}
 
           {current.type === 'review' && (
@@ -607,6 +749,7 @@ export default function Flow() {
               <div className="text-sm text-muted-foreground">Value: {Math.round(getByPath(payload, current.field) ?? 0)}</div>
             </div>
           )}
+          {current.id !== 'sleep_intro' && (
           <FooterNav
             onBack={() => {
               if (current.type === 'deep_dive') {
@@ -660,14 +803,21 @@ export default function Flow() {
               nextStep();
             }}
             backDisabled={stepIdx===0}
-            nextDisabled={(current.id === 'reason' && !reasonChoice) || (current.id === 'areas_select' && (selectedTopics.length === 0)) || (current.type === 'topic_rate' && !(severities?.[current.meta?.topicId] >= 1 && severities?.[current.meta?.topicId] <= 5)) || stepIdx===steps.length-1}
+            nextDisabled={false}
             saving={saving}
             toast={toast}
           />
+          )}
         </CardContent>
       </Card>
       </Glow>
-      <div className="mt-4 text-center text-xs text-muted-foreground">Step {stepIdx+1} of {steps.length}</div>
+      <div className="mt-4 text-center text-xs text-muted-foreground">
+        {current?.id === 'sleep_intro'
+          ? 'Great progress! Next: a few quick sleep habits.'
+          : current?.id === 'sleep_short'
+            ? 'Nice work! Next: a short check‑in (CEC).'
+            : 'You’re doing great — keep going.'}
+      </div>
     </div>
   );
 }
