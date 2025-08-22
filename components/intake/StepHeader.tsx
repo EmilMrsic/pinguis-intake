@@ -1,6 +1,6 @@
 import React from 'react';
 import { CardDescription, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
+import { GlowButton } from '@/components/intake/GlowButton';
 
 export function StepHeader({
   title,
@@ -23,7 +23,7 @@ export function StepHeader({
         <div className="mt-2 text-sm">
           <div className="inline-flex items-center gap-2 rounded-md border bg-background px-3 py-2">
             <span>Welcome back{firstName ? `, ${firstName}` : ''}! You can continue your intake.</span>
-            <Button size="sm" variant="secondary" onClick={onContinue}>Continue</Button>
+            <GlowButton onClick={onContinue}>Continue</GlowButton>
           </div>
         </div>
       )}
