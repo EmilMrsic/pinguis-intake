@@ -5,6 +5,7 @@ import { GlowButton } from '@/components/intake/GlowButton';
 export function FooterNav({
   onBack,
   onNext,
+  nextLabel = 'Next',
   backDisabled,
   nextDisabled,
   saving,
@@ -12,6 +13,7 @@ export function FooterNav({
 }: {
   onBack: () => void;
   onNext: () => void;
+  nextLabel?: string;
   backDisabled?: boolean;
   nextDisabled?: boolean;
   saving?: boolean;
@@ -20,7 +22,7 @@ export function FooterNav({
   return (
     <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 pt-2">
       <Button variant="outline" onClick={onBack} disabled={!!backDisabled}>Back</Button>
-      <GlowButton onClick={onNext} disabled={!!nextDisabled}>Next</GlowButton>
+      <GlowButton onClick={onNext} disabled={!!nextDisabled}>{nextLabel}</GlowButton>
       <div className="sm:ml-auto text-sm text-muted-foreground" aria-live="polite">{saving ? 'Saving…' : toast || 'Saved'}</div>
     </div>
   );

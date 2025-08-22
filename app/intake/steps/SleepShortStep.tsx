@@ -140,16 +140,7 @@ export default function SleepShortStep({
 
       {/* Derived metrics are computed for gating, not shown to clients */}
 
-      {isiPreview && (
-        <div className="rounded-md border p-3">
-          <div className="text-sm font-medium">
-            {isiPreview.wouldShow
-              ? 'You will get an insomnia questionnaire'
-              : 'No, you would not get an insomnia questionnaire'}
-          </div>
-          <div className="text-xs text-muted-foreground mt-1">Here’s why: {isiPreview.reason}</div>
-        </div>
-      )}
+      {isiPreview && (()=>{ try { console.debug('ISI Preview:', isiPreview); } catch {} return null; })()}
     </div>
   );
 }
