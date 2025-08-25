@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
     async function docToResp(doc: FirebaseFirestore.DocumentSnapshot) {
       if (!doc.exists) return null;
       const data = doc.data() || {} as any;
-      return { intakeId: data.intake_id || doc.id, payload: data.payload || {} };
+      return { intakeId: data.intake_id || doc.id, clientId: data.client_id || null, payload: data.payload || {} };
     }
 
     if (intakeId) {

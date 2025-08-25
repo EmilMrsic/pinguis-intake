@@ -22,6 +22,7 @@ import { firebaseClient } from '@/lib/firebaseClient';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import { FLOW_VARIANT } from '@/lib/intake/config';
 import { devPracticeId, devClientId } from '@/lib/devIds';
+import { loadIntake } from '@/lib/intake/intakeApi';
 import { jumpToNextRelevantIndex, markIntakeComplete } from '@/lib/intake/helpers';
 import { useAutosavePayload } from '@/app/intake/hooks/useAutosave';
 import React from 'react';
@@ -78,6 +79,33 @@ export default function Flow() {
   const DEEP_ITEMS: Record<string, { key:string; label:string }[]> = DEEP_ITEMS_CONST;
 
   const topicPromptFallback: Record<string, string> = {};
+
+  // If arriving via patient link, start fresh locally (but do not sign out the provider)
+  useEffect(() => {
+    try {
+      const url = new URL(window.location.href);
+      if (url.searchParams.get('asPatient') === '1') {
+        setPayload({});
+      }
+    } catch {}
+  }, []);
+
+  // Bootstrap payload when arriving via patient link using query params (practiceId,intakeId)
+  useEffect(() => {
+    (async () => {
+      try {
+        const url = new URL(window.location.href);
+        const practiceId = url.searchParams.get('practiceId');
+        const intakeId = url.searchParams.get('intakeId');
+        const asPatient = url.searchParams.get('asPatient') === '1';
+        if (asPatient && practiceId && intakeId) {
+          setLoadingIntake(true);
+          const resp = await loadIntake({ practiceId, intakeId });
+          if (resp?.payload) setPayload(resp.payload);
+        }
+      } catch {} finally { setLoadingIntake(false); }
+    })();
+  }, []);
 
   const selected = payload.areas?.selected ?? [];
   const steps: Step[] = useMemo<Step[]>(() => buildSteps(selected, topics), [selected, topics]);
@@ -369,7 +397,13 @@ export default function Flow() {
       <Card className="relative">
         <CardHeader>
           {current.id !== 'sleep_intro' && (
-            <StepHeader title={current.title} description={current.description} showWelcome={stepIdx===0 && !!payload?.intakeId} firstName={profile?.first_name} onContinue={jumpToLastSaved} />
+            <StepHeader
+              title={current.title}
+              description={current.description}
+              showWelcome={stepIdx===0 && !!payload?.intakeId && !!payload?.changed}
+              firstName={profile?.first_name}
+              onContinue={jumpToLastSaved}
+            />
           )}
         </CardHeader>
         <CardContent className="space-y-6">
