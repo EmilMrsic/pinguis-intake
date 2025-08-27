@@ -1,11 +1,20 @@
 import { firebaseClient } from '@/lib/firebaseClient';
 import { getAuth } from 'firebase/auth';
-import { getFirestore, collection, getDocs, doc, setDoc, addDoc, getDoc, query, where, serverTimestamp, updateDoc } from 'firebase/firestore';
+import { getFirestore, collection, getDocs, doc, setDoc, addDoc, getDoc, query, where, serverTimestamp, updateDoc, limit } from 'firebase/firestore';
 import type { Client, Provider, Id, SessionConfig, Session, Segment, Features } from '../schema';
 import { CONFIG } from '../config';
 
 function db() { const app = firebaseClient(); return getFirestore(app); }
 function auth() { const app = firebaseClient(); return getAuth(app); }
+async function getPracticeId(): Promise<string> {
+  const a = auth();
+  const u = a.currentUser;
+  if (!u) throw new Error('Not signed in');
+  const tok = await u.getIdTokenResult();
+  const pid = (tok.claims as any)?.practice_id as string | undefined;
+  if (!pid) throw new Error('No practice_id claim');
+  return pid;
+}
 
 export async function getProvider(): Promise<Provider> {
   const a = auth();
@@ -16,21 +25,91 @@ export async function getProvider(): Promise<Provider> {
 
 export async function searchClients(qs: string): Promise<Client[]> {
   const dbi = db();
+  const pid = await getPracticeId();
   const out: Client[] = [];
-  // naive: scan all practices/*/clients (in real app, scope by provider/tenant)
-  const practices = await getDocs(collection(dbi, 'practices'));
-  for (const p of practices.docs) {
-    const clientsCol = collection(dbi, `practices/${p.id}/clients`);
-    const snap = await getDocs(clientsCol);
-    for (const c of snap.docs) {
-      const d = c.data() as any;
-      const name = `${d.first_name||''} ${d.last_name||''}`.toLowerCase();
-      if (!qs || name.includes(qs.toLowerCase()) || (d.email||'').toLowerCase().includes(qs.toLowerCase())) {
-        out.push({ id: c.id, firstName: d.first_name||'', lastName: d.last_name||'', dob: d.birthdate||d.dob||'', mrn: d.mrn||undefined });
+  const clientsCol = collection(dbi, `practices/${pid}/clients`);
+  const snap = await getDocs(clientsCol);
+  for (const c of snap.docs) {
+    const d = c.data() as any;
+    const name = `${d.first_name||''} ${d.last_name||''}`.toLowerCase();
+    if (!qs || name.includes(qs.toLowerCase()) || (d.email||'').toLowerCase().includes(qs.toLowerCase())) {
+      out.push({ id: c.id, firstName: d.first_name||'', lastName: d.last_name||'', dob: d.birthdate||d.dob||'', mrn: d.mrn||undefined });
+    }
+  }
+  // Fallback: if none, try constructing from recent intakes payloads
+  if (!out.length) {
+    const intsSnap = await getDocs(collection(dbi, `practices/${pid}/intakes`));
+    for (const d of intsSnap.docs) {
+      const data = d.data() as any;
+      const profile = data?.payload?.profile || {};
+      if (!profile?.first_name && !profile?.last_name) continue;
+      const name = `${profile.first_name||''} ${profile.last_name||''}`.toLowerCase();
+      if (!qs || name.includes(qs.toLowerCase()) || (profile.email||'').toLowerCase().includes(qs.toLowerCase())) {
+        out.push({ id: data.client_id || '', firstName: profile.first_name||'', lastName: profile.last_name||'', dob: profile.birthdate||'', mrn: undefined });
       }
     }
   }
   return out;
+}
+
+export async function getClientById(clientId: Id): Promise<Client | null> {
+  const dbi = db();
+  const pid = await getPracticeId();
+  // Try clients
+  const clientsSnap = await getDocs(collection(dbi, `practices/${pid}/clients`));
+  for (const c of clientsSnap.docs) {
+    if (c.id === clientId) {
+      const d = c.data() as any;
+      return { id: c.id, firstName: d.first_name||'', lastName: d.last_name||'', dob: d.birthdate||d.dob||'', mrn: d.mrn||undefined };
+    }
+  }
+  // Fallback via intake payload
+  const intakesSnap = await getDocs(collection(dbi, `practices/${pid}/intakes`));
+  for (const d of intakesSnap.docs) {
+    const data = d.data() as any;
+    if (data?.client_id === clientId) {
+      const p = data?.payload?.profile || {};
+      return { id: clientId, firstName: p.first_name||'', lastName: p.last_name||'', dob: p.birthdate||'', mrn: undefined };
+    }
+  }
+  return null;
+}
+
+export async function getClientFromIntake(intakeId: Id): Promise<Client | null> {
+  const dbi = db();
+  const pid = await getPracticeId();
+  // 1) Direct doc get by id (works with rules that allow read but not list)
+  try {
+    const ref = doc(dbi, `practices/${pid}/intakes/${intakeId}`);
+    const snap = await getDoc(ref);
+    if (snap.exists()) {
+      const data = snap.data() as any;
+      const p = data?.payload?.profile || {};
+      const cid = data?.client_id || '';
+      return { id: cid, firstName: p.first_name||'', lastName: p.last_name||'', dob: p.birthdate||'', mrn: undefined };
+    }
+  } catch {}
+  // 2) Fallback: query by `intakeId` field
+  try {
+    const q1 = query(collection(dbi, `practices/${pid}/intakes`), where('intakeId','==', intakeId), limit(1));
+    const s1 = await getDocs(q1);
+    const d = s1.docs[0];
+    if (d) {
+      const data = d.data() as any; const p = data?.payload?.profile || {}; const cid = data?.client_id || '';
+      return { id: cid, firstName: p.first_name||'', lastName: p.last_name||'', dob: p.birthdate||'', mrn: undefined };
+    }
+  } catch {}
+  // 3) Fallback: query by legacy `intake_id` field
+  try {
+    const q2 = query(collection(dbi, `practices/${pid}/intakes`), where('intake_id','==', intakeId), limit(1));
+    const s2 = await getDocs(q2);
+    const d2 = s2.docs[0];
+    if (d2) {
+      const data = d2.data() as any; const p = data?.payload?.profile || {}; const cid = data?.client_id || '';
+      return { id: cid, firstName: p.first_name||'', lastName: p.last_name||'', dob: p.birthdate||'', mrn: undefined };
+    }
+  } catch {}
+  return null;
 }
 
 export async function getClientIntake(clientId: Id): Promise<{status:'Complete'|'Incomplete'|'Stale', lastIntakeAt?: string}> {

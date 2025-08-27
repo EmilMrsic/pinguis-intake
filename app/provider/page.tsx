@@ -1,10 +1,12 @@
 "use client";
 import { useEffect, useMemo, useState } from 'react';
 import { firebaseClient } from '@/lib/firebaseClient';
-import { getAuth, onAuthStateChanged } from 'firebase/auth';
+import { getAuth, onAuthStateChanged, signOut } from 'firebase/auth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { SendIntakeButton } from './SendIntakeButton';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 
 firebaseClient();
 
@@ -19,30 +21,36 @@ type IntakeRow = {
 };
 
 export default function ProviderDashboardPage() {
+  const router = useRouter();
   const [rows, setRows] = useState<IntakeRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [practiceId, setPracticeId] = useState<string | null>(null);
 
   useEffect(() => {
-    const auth = getAuth();
-    const unsub = onAuthStateChanged(auth, async (u) => {
-      if (!u) { setLoading(false); setError('Not signed in'); return; }
-      const token = await u.getIdTokenResult();
-      const role = (token.claims as any)?.role ?? '';
-      if (role !== 'clinician' && role !== 'admin') { setError('Provider role required'); setLoading(false); return; }
-      const pid = (token.claims as any)?.practice_id as string | undefined;
-      if (!pid) { setError('No practice claim found'); setLoading(false); return; }
-      setPracticeId(pid);
-      try {
-        const res = await fetch('/api/provider/intakes', { method:'GET', headers:{'Authorization': `Bearer ${await u.getIdToken()}`}});
-        const data = await res.json();
-        if (!res.ok || data.ok === false) throw new Error(data?.error || 'Failed to load');
-        setRows(data.items || []);
-      } catch (e: any) { setError(e?.message || 'Failed to load'); }
+    try {
+      const auth = getAuth();
+      const unsub = onAuthStateChanged(auth, async (u) => {
+        if (!u) { setLoading(false); setError('Not signed in'); return; }
+        try {
+          const token = await u.getIdTokenResult();
+          const role = (token.claims as any)?.role ?? '';
+          if (role !== 'clinician' && role !== 'admin') { setError('Provider role required'); setLoading(false); return; }
+          const pid = (token.claims as any)?.practice_id as string | undefined;
+          if (!pid) { setError('No practice claim found'); setLoading(false); return; }
+          setPracticeId(pid);
+          const res = await fetch('/api/provider/intakes', { method:'GET', headers:{'Authorization': `Bearer ${await u.getIdToken()}`}});
+          const data = await res.json();
+          if (!res.ok || data.ok === false) throw new Error(data?.error || 'Failed to load');
+          setRows(data.items || []);
+        } catch (e: any) { setError(e?.message || 'Failed to load'); }
+        setLoading(false);
+      });
+      return () => { try { unsub(); } catch {} };
+    } catch (e:any) {
       setLoading(false);
-    });
-    return () => { try { unsub(); } catch {} };
+      setError(e?.message || 'Auth initialization failed');
+    }
   }, []);
 
   const sorted = useMemo(() => {
@@ -84,8 +92,20 @@ export default function ProviderDashboardPage() {
     }
   }
 
+  async function onLogout() {
+    try { await signOut(getAuth()); } catch {}
+    router.replace('/provider/login');
+  }
+
   if (loading) return <main className="min-h-dvh grid place-items-center"><p>Loading…</p></main>;
-  if (error) return <main className="min-h-dvh grid place-items-center"><p className="text-red-600">{error}</p></main>;
+  if (error) return (
+    <main className="min-h-dvh grid place-items-center p-6">
+      <div className="text-center space-y-2">
+        <p className="text-red-600">{error}</p>
+        <a className="underline text-sm" href="/provider/login">Go to provider login</a>
+      </div>
+    </main>
+  );
 
   return (
     <div className="min-h-dvh grid grid-cols-[16rem_1fr]">
@@ -105,8 +125,11 @@ export default function ProviderDashboardPage() {
             <h1 className="text-xl font-semibold">Patients</h1>
             <p className="text-sm text-muted-foreground">Practice: {practiceId}</p>
           </div>
-          {/* Modal trigger */}
-          <PatientCreateDialog onSubmit={onCreatePatient} />
+          {/* Actions */}
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" onClick={onLogout}>Sign out</Button>
+            <PatientCreateDialog onSubmit={onCreatePatient} />
+          </div>
         </div>
 
         <div className="overflow-hidden rounded-md border">
@@ -131,8 +154,10 @@ export default function ProviderDashboardPage() {
                   {r.map_complete ? 'Complete' : 'Not complete'}
                 </span>
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 justify-end">
                 <SendIntakeButton intakeId={r.intake_id} />
+                <Link className="px-2 py-1 border rounded hover:bg-slate-50" href={`/mapping?intakeId=${r.intake_id}`}>Map</Link>
+                <Link className="px-2 py-1 border rounded hover:bg-slate-50" href={`/provider/patients/${r.intake_id}`}>Open →</Link>
               </div>
             </div>
           ))}
