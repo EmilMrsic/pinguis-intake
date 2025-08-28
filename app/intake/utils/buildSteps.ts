@@ -16,9 +16,11 @@ export function buildSteps(selectedTopicIds: string[], topics: { id:string; labe
   }));
   return [
     ...base,
+    { id:'areas_prep', title:'Before we continue', description:'A quick heads-up', type:'text', field:'areas_prep' },
     ...topicSteps,
-    { id:'deep_dive', title:'Quick zoom-in', description:'0 = not at all · 10 = severe', type:'deep_dive', field:'deepdive' },
+    { id:'meds_intro', title:'Thanks — almost there', description:'Medications & supplements', type:'text', field:'meds_intro' },
     { id:'daily',       title:'Daily habits & health', type:'daily', field:'daily' },
+    { id:'personality', title:'Psychosocial Analysis', type:'personality', field:'personality' },
     { id:'sleep_intro', title:'Sleep context', description:'Why sleep matters for your map', type:'sleep_intro', field:'sleep_intro' },
     { id:'sleep_short', title:'Sleep habits', type:'sleep_short', field:'sleep' },
     { id:'cec',         title:'CEC questionnaire', type:'cec', field:'cec' },

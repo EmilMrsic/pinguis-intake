@@ -11,8 +11,7 @@ import { ContactStep } from '@/app/intake/steps/ContactStep';
 import { AreasSelectStep } from '@/app/intake/steps/AreasSelectStep';
 import { TopicRateStep } from '@/app/intake/steps/TopicRateStep';
 import TopicRateContainer from '@/app/intake/steps/TopicRateContainer';
-import { DeepDiveStep } from '@/app/intake/steps/DeepDiveStep';
-import DeepDiveContainer from '@/app/intake/steps/DeepDiveContainer';
+// Deep-dive removed
 import { TopicNoteField } from '@/app/intake/steps/TopicNoteField';
 import DailyStep from '@/app/intake/steps/DailyStep';
 import { FooterNav } from '@/components/intake/FooterNav';
@@ -43,6 +42,9 @@ import { computeSdsPreview } from '@/lib/intake/sleep';
 import { useIsiGate } from '@/app/intake/hooks/useIsiGate';
 import { useAvatarActions } from '@/app/intake/hooks/useAvatarActions';
 import { usePreparedRecaps, generateSectionRecap } from '@/app/intake/hooks/useRecapTriggers';
+import AreasPrepStep from '@/app/intake/steps/AreasPrepStep';
+import MedsIntroStep from '@/app/intake/steps/MedsIntroStep';
+import PersonalityStep from '@/app/intake/steps/PersonalityStep';
  
 
 export type Step = {
@@ -73,8 +75,15 @@ export default function Flow() {
 
   const dbg = useCallback((..._args: any[]) => {}, []);
 
-  // Topics catalog
-  const topics: { id: string; label: string }[] = topicsCatalog;
+  // Topics catalog + any custom topics added by the patient
+  const builtinTopics: { id: string; label: string }[] = topicsCatalog;
+  const customTopics: { id: string; label: string }[] = Array.isArray(payload?.custom_topics) ? payload.custom_topics : [];
+  const topics: { id: string; label: string }[] = useMemo(() => {
+    const map = new Map<string, { id: string; label: string }>();
+    for (const t of builtinTopics) map.set(t.id, t);
+    for (const t of customTopics) if (!map.has(t.id)) map.set(t.id, t);
+    return Array.from(map.values());
+  }, [builtinTopics, customTopics]);
 
   const DEEP_ITEMS: Record<string, { key:string; label:string }[]> = DEEP_ITEMS_CONST;
 
@@ -177,21 +186,7 @@ export default function Flow() {
 
   // autosave + updateField moved to useAutosavePayload hook
 
-  function setDeepDive(topicId: string, itemKey: string, val: number) {
-    const next = structuredClone(payload);
-    setByPath(next, `deepdive.${topicId}.${itemKey}`, val);
-    const field = `deepdive.${topicId}.${itemKey}`;
-    const entry = { field, topic: topicId, value: val } as any;
-    const existing = Array.isArray(next.tracker?.candidates) ? next.tracker.candidates : [];
-    const map = new Map(existing.map((r: any) => [r.field, r]));
-    if (val >= 6) map.set(field, entry); else map.delete(field);
-    next.tracker = { ...(next.tracker||{}), candidates: Array.from(map.values()) };
-    setPayload(next);
-    autosave(next);
-    dbg('deepDive:set', { topicId, itemKey, val });
-    // optional AI notify
-    // aiTurn disabled
-  }
+  // Deep-dive removed
 
   function nextStep() { if (stepIdx < steps.length - 1) setStepIdx(stepIdx + 1); }
   function prevStep() { if (stepIdx > 0) setStepIdx(stepIdx - 1); }
@@ -251,6 +246,8 @@ export default function Flow() {
     } catch { jumpToNextRelevant(); }
   }
 
+  const hasDeepDive = useCallback((_topicId: string) => false, []);
+
   function toggleTopic(topicId: string) {
     const next = structuredClone(payload);
     if (!next.intakeId) next.intakeId = generateIntakeIdFrom(next);
@@ -275,7 +272,7 @@ export default function Flow() {
       selected.push(topicId);
     }
     next.areas = { ...(next.areas ?? {}), selected, severity: { ...(next.areas?.severity ?? {}) } };
-    const enq = selected.filter(t => (next.areas.severity?.[t] ?? 0) >= 3);
+    const enq = selected.filter(t => hasDeepDive(t) && (next.areas.severity?.[t] ?? 0) >= 3);
     next.queues = { ...(next.queues || {}), deepDive: Array.from(new Set(enq)) };
     setPayload(next);
     autosave(next, { immediate: true, silent: true });
@@ -289,7 +286,7 @@ export default function Flow() {
     if (!selected.includes(topicId)) selected.push(topicId);
     const severity = { ...(next.areas?.severity ?? {}), [topicId]: val };
     next.areas = { ...(next.areas ?? {}), selected, severity };
-    const enq = (next.areas.selected ?? []).filter((t: string) => (severity?.[t] ?? 0) >= 3);
+    const enq = (next.areas.selected ?? []).filter((t: string) => hasDeepDive(t) && (severity?.[t] ?? 0) >= 3);
     next.queues = { ...(next.queues || {}), deepDive: Array.from(new Set(enq)) };
     // if severity drops below 3, cleanup deep-dive and related trackers for this topic
     if ((severity?.[topicId] ?? 0) < 3) {
@@ -307,6 +304,59 @@ export default function Flow() {
     setPayload(next);
     autosave(next, { immediate: true, silent: true });
     // aiTurn disabled
+  }
+
+  function slugifyLabelToId(label: string, usedIds: Set<string>): string {
+    const base = ('custom-' + String(label || ''))
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, '')
+      .trim()
+      .replace(/[\s_-]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'custom-item';
+    let id = base;
+    let n = 2;
+    while (usedIds.has(id)) { id = `${base}-${n++}`; }
+    return id;
+  }
+
+  async function addCustomTopic(label: string) {
+    const txt = (label || '').trim();
+    if (!txt) return;
+    // Try to categorize with OpenAI
+    let mappedId: string | null = null;
+    try {
+      const res = await fetch('/api/classify-concern', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: txt }) });
+      if (res.ok) {
+        const data = await res.json();
+        const cat = String(data?.category || '').trim();
+        if (cat && topics.find(t=>t.id===cat)) mappedId = cat;
+      }
+    } catch {}
+    const next = structuredClone(payload);
+    if (!next.intakeId) next.intakeId = generateIntakeIdFrom(next);
+    if (mappedId) {
+      // Select the mapped existing topic and attach a note about categorization
+      const selected: string[] = Array.from(new Set([...(next.areas?.selected ?? []), mappedId]));
+      next.areas = { ...(next.areas ?? {}), selected, severity: { ...(next.areas?.severity ?? {}) } };
+      const prev = String(next.notes?.byTopic?.[mappedId] || '');
+      const annotated = prev ? `${prev}\n(User added concern categorized here: "${txt}")` : `User added concern categorized here: "${txt}"`;
+      setByPath(next, `notes.byTopic.${mappedId}`, annotated);
+    } else {
+      // Create a new custom topic
+      const used = new Set<string>([...topics.map(t=>t.id), ...Object.keys(next?.areas?.severity||{})]);
+      const id = slugifyLabelToId(txt, used);
+      const ct = Array.isArray(next.custom_topics) ? next.custom_topics : [];
+      ct.push({ id, label: txt });
+      next.custom_topics = ct;
+      const selected: string[] = Array.from(new Set([...(next.areas?.selected ?? []), id]));
+      next.areas = { ...(next.areas ?? {}), selected, severity: { ...(next.areas?.severity ?? {}) } };
+    }
+    // Recompute deep-dive queue (custom topics have no deep items by default)
+    const severity = next.areas.severity || {};
+    const enq = (next.areas.selected ?? []).filter((t: string) => hasDeepDive(t) && (severity?.[t] ?? 0) >= 3);
+    next.queues = { ...(next.queues || {}), deepDive: Array.from(new Set(enq)) };
+    setPayload(next);
+    autosave(next, { immediate: true, silent: true });
   }
 
   // Topic note setter (debounced + non-blocking AI call)
@@ -362,18 +412,7 @@ export default function Flow() {
 
   usePreparedRecaps({ payloadRef, steps, setStepIdx, setPayload, autosave });
 
-  // When entering deep_dive, handle skip if no queue; reset ddIndex
-  useEffect(() => {
-    if (current?.type !== 'deep_dive') return;
-    const q = payload?.queues?.deepDive ?? [];
-    setDdIndex(0);
-    if (q.length === 0) {
-      nextStep();
-      return;
-    }
-    // For peak variant, same rule: only proceed if any were enqueued (already handled by q.length check)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current?.type]);
+  // Deep-dive removed
 
   useIsiGate({ currentType: current?.type, payload, nextStep });
 
@@ -396,7 +435,7 @@ export default function Flow() {
       <Glow>
       <Card className="relative">
         <CardHeader>
-          {current.id !== 'sleep_intro' && (
+          {current.id !== 'sleep_intro' && current.id !== 'meds_intro' && (
             <StepHeader
               title={current.title}
               description={current.description}
@@ -413,7 +452,18 @@ export default function Flow() {
           )}
 
           {current.type === 'areas_select' && (
-            <AreasSelectStep selected={selectedTopics} toggle={toggleTopic} />
+            <AreasSelectStep topics={topics} selected={selectedTopics} toggle={toggleTopic} onAddCustom={addCustomTopic} />
+          )}
+
+          {current.id === 'areas_prep' && (
+            <div className="grid gap-4">
+              <AreasPrepStep selected={selectedTopics} topics={topics} />
+              <div className="flex items-center gap-3 pt-2">
+                <Button variant="outline" onClick={prevStep}>Back</Button>
+                <GlowButton onClick={nextStep}>I’m ready</GlowButton>
+                <div className="sm:ml-auto text-sm text-muted-foreground" aria-live="polite">We’ll ask you focused questions</div>
+              </div>
+            </div>
           )}
 
           {current.type === 'contact' && (
@@ -424,9 +474,7 @@ export default function Flow() {
             <TopicRateContainer payload={payload} setPayload={setPayload} autosave={autosave} topics={topics} topicId={current.meta?.topicId as string} />
           )}
 
-          {current.type === 'deep_dive' && (
-            <DeepDiveContainer payload={payload} topics={topics} setPayload={setPayload} autosave={autosave} />
-          )}
+          {/* deep_dive removed */}
 
           {current.id === 'sleep_intro' && (
             <div className="grid gap-4">
@@ -435,6 +483,17 @@ export default function Flow() {
                 <Button variant="outline" onClick={prevStep}>Back</Button>
                 <GlowButton onClick={nextStep}>Answer a few quick questions about your sleep</GlowButton>
                 <div className="sm:ml-auto text-sm text-muted-foreground" aria-live="polite">{saving ? 'Saving…' : toast || 'Saved'}</div>
+              </div>
+            </div>
+          )}
+
+          {current.id === 'meds_intro' && (
+            <div className="grid gap-4">
+              <MedsIntroStep />
+              <div className="flex items-center gap-3 pt-2">
+                <Button variant="outline" onClick={prevStep}>Back</Button>
+                <GlowButton onClick={nextStep}>I’m ready</GlowButton>
+                <div className="sm:ml-auto text-sm text-muted-foreground" aria-live="polite">We’ll ask about medications and supplements</div>
               </div>
             </div>
           )}
@@ -460,6 +519,20 @@ export default function Flow() {
               }}
               context={{ selectedTopics, severities, firstName: profile?.first_name }}
             />
+          )}
+
+          {current.id === 'personality' && (
+            <div className="grid gap-4">
+              <PersonalityStep
+                personality={payload?.personality || {}}
+                update={(rel, val)=>{ const next=structuredClone(payload); setByPath(next, `personality.${rel}`, val); setPayload(next); autosave(next,{silent:true}); }}
+              />
+              <div className="flex items-center gap-3 pt-2">
+                <Button variant="outline" onClick={prevStep}>Back</Button>
+                <GlowButton onClick={nextStep}>Next</GlowButton>
+                <div className="sm:ml-auto text-sm text-muted-foreground" aria-live="polite">Saved</div>
+              </div>
+            </div>
           )}
 
           {current.type === 'sleep_short' && (()=>{
@@ -556,7 +629,7 @@ export default function Flow() {
             </>
           )}
 
-          {current.type === 'text' && current.id !== 'review_prepare' && (
+          {current.type === 'text' && current.id !== 'review_prepare' && current.id !== 'areas_prep' && current.id !== 'meds_intro' && (
             <textarea
               className="w-full min-h-[140px] rounded-md border p-3 text-base"
               placeholder="Type here"
@@ -577,15 +650,9 @@ export default function Flow() {
               <div className="text-sm text-muted-foreground">Value: {Math.round(getByPath(payload, current.field) ?? 0)}</div>
             </div>
           )}
-          {current.id !== 'sleep_intro' && current.id !== 'review_prepare' && current.type !== 'review' && (
+          {current.id !== 'sleep_intro' && current.id !== 'review_prepare' && current.id !== 'meds_intro' && current.type !== 'review' && (
           <FooterNav
-            onBack={() => {
-              if (current.type === 'deep_dive') {
-                if (ddIndex > 0) setDdIndex(ddIndex - 1); else prevStep();
-                return;
-              }
-              prevStep();
-            }}
+            onBack={() => { prevStep(); }}
             onNext={() => {
               if (current.id === 'contact') {
                 const draft = (contactDraftRef as any).current || {};
@@ -595,39 +662,8 @@ export default function Flow() {
                 setPayload(next);
                 autosave(next, { silent: true });
               }
-              if (current.type === 'deep_dive') {
-                const q: string[] = payload?.queues?.deepDive ?? [];
-                // Commit any outstanding draft values before navigating
-                try {
-                  const topicId = q[Math.max(0, Math.min(ddIndex, q.length - 1))];
-                  const entries = Object.entries(ddDraft).filter(([k]) => k.startsWith(`${topicId}.`));
-                  for (const [k, v] of entries) {
-                    const itemKey = k.split('.').slice(1).join('.');
-                    if (typeof v === 'number') setDeepDive(topicId, itemKey, v as number);
-                  }
-                  // Commit any outstanding draft WHY text
-                  const whyEntries = Object.entries(ddWhyDraft).filter(([k]) => k.startsWith(`${topicId}.`));
-                  if (whyEntries.length > 0) {
-                    const next = structuredClone(payload);
-                    for (const [k, v] of whyEntries) {
-                      const itemKey = k.split('.').slice(1).join('.');
-                      setByPath(next, `deepdive_meta.${topicId}.${itemKey}.why`, String(v||'').trim());
-                    }
-                    setPayload(next);
-                    autosave(next, { silent: true });
-                  }
-                } catch {}
-                if (ddIndex < Math.max(0, q.length - 1)) setDdIndex(ddIndex + 1); else nextStep();
-                return;
-              }
-              if (current.type === 'topic_rate') {
-                const topicId = current.meta?.topicId as string;
-                const text = (topicNoteLatestRef.current || '').trim();
-                const next = structuredClone(payload);
-                setByPath(next, `notes.byTopic.${topicId}`, text);
-                setPayload(next);
-                autosave(next, { immediate: true, silent: true });
-              }
+              // deep_dive removed
+              // Note: topic notes are already saved within the topic component; avoid overwriting here
               // Trigger recap generation for completed section
               void generateSectionRecap({ currentField: current.field, profileFirstName: profile?.first_name, payloadRef, setPayload, autosave });
               nextStep();
@@ -642,12 +678,22 @@ export default function Flow() {
         </CardContent>
       </Card>
       </Glow>
-      <div className="mt-4 text-center text-xs text-muted-foreground">
-        {current?.id === 'sleep_intro'
-          ? 'Great progress! Next: a few quick sleep habits.'
-          : current?.id === 'sleep_short'
-            ? 'Nice work! Next: a short check‑in (CEC).'
-            : 'You’re doing great — keep going.'}
+      <div className="mt-4 text-center text-xs">
+        {(() => {
+          const chapterIndex = Math.max(0, steps.findIndex(s => s.id === current?.id));
+          const remaining = Math.max(0, steps.length - (chapterIndex + 1));
+          const approxMinutes = Math.max(1, Math.min(20, remaining));
+          const msg = current?.id === 'sleep_intro'
+            ? 'Great progress! Next: a few quick sleep habits.'
+            : current?.id === 'sleep_short'
+              ? 'Nice work! Next: a short check‑in (CEC).'
+              : 'You’re doing great — keep going.';
+          return (
+            <span className="text-muted-foreground">
+              {msg} <span className="inline-block align-middle ml-2 rounded-full border px-2 py-0.5 bg-primary/10 text-primary border-primary/20">~{approxMinutes} min left</span>
+            </span>
+          );
+        })()}
       </div>
     </div>
   );

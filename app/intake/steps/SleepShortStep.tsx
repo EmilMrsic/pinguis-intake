@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import TimePicker, { TimeValue } from '@/app/intake/steps/TimePicker';
 import { Slider } from '@/components/ui/slider';
 import { Input } from '@/components/ui/input';
-import { Checkbox } from '@/components/ui/checkbox';
 
 export default function SleepShortStep({
   sleep,
@@ -21,24 +20,19 @@ export default function SleepShortStep({
     } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const flags = [
-    { id: 'snoring', label: 'Snoring' },
-    { id: 'vivid_dreams', label: 'Vivid dreams or nightmares' },
-    { id: 'restless_legs', label: 'Restless legs' },
-    { id: 'teeth_grinding', label: 'Teeth grinding' },
-    { id: 'parasomnias', label: 'Sleepwalking or talking' },
+  // Sleep subratings (0–3)
+  const subItems: { key: string; label: string }[] = [
+    { key: 'drift_off_struggle', label: 'I struggle to drift off at night.' },
+    { key: 'predawn_waking', label: "I wake up frequently before dawn and can't return to sleep." },
+    { key: 'exhausted_after_full_night', label: "I feel exhausted even after a full night's rest." },
+    { key: 'long_naps_needed', label: 'I take unusually long naps to feel alert.' },
+    { key: 'schedule_varies', label: 'My sleep schedule varies wildly from day to day.' },
+    { key: 'rested_on_waking', label: 'I feel rested and refreshed when I wake up.' },
   ];
-
-  function setFlag(id: string, v: boolean) {
-    const next = { ...(sleep?.flags || {}) } as any;
-    if (v) next[id] = true; else delete next[id];
-    update('flags', next);
-  }
 
   const latency = Number(sleep?.sleep_latency_minutes ?? 0);
   const awakenings = Number(sleep?.night_awakenings_count ?? 0);
   const awakeMins = Number(sleep?.awake_time_at_night_minutes ?? 0);
-  const rested = Number(sleep?.rested_on_waking_0to10 ?? 0);
 
   function parseTime(t: string | undefined, fallback: { h: number; m: number }) {
     try {
@@ -90,7 +84,7 @@ export default function SleepShortStep({
               <Input className="w-20 border-0 focus-visible:ring-0 text-center" type="number" min={0} step={5} value={latency} onChange={(e)=>update('sleep_latency_minutes', Math.max(0, Number(e.target.value||0)))} />
               <button type="button" className="h-9 px-2 text-lg" onClick={()=> update('sleep_latency_minutes', Math.min(120, latency + 5))}>+</button>
             </div>
-            <span className="text-xs text-muted-foreground">Best guess in minutes</span>
+            <span className="text-xs text-muted-foreground">A rough estimate is perfect — no need to be exact.</span>
           </div>
         </div>
 
@@ -102,7 +96,7 @@ export default function SleepShortStep({
               <Input className="w-20 border-0 focus-visible:ring-0 text-center" type="number" min={0} step={1} value={awakenings} onChange={(e)=>update('night_awakenings_count', Math.max(0, Number(e.target.value||0)))} />
               <button type="button" className="h-9 px-2 text-lg" onClick={()=> update('night_awakenings_count', Math.min(10, awakenings + 1))}>+</button>
             </div>
-            <span className="text-xs text-muted-foreground">On an average night</span>
+            <span className="text-xs text-muted-foreground">On an average night (a rough estimate is perfect).</span>
           </div>
         </div>
 
@@ -114,29 +108,98 @@ export default function SleepShortStep({
               <Input className="w-20 border-0 focus-visible:ring-0 text-center" type="number" min={0} step={5} value={awakeMins} onChange={(e)=>update('awake_time_at_night_minutes', Math.max(0, Number(e.target.value||0)))} />
               <button type="button" className="h-9 px-2 text-lg" onClick={()=> update('awake_time_at_night_minutes', Math.min(180, awakeMins + 5))}>+</button>
             </div>
+            <span className="text-xs text-muted-foreground">A rough estimate is perfect — no need to be exact.</span>
+          </div>
+        </div>
+
+        {/* Rested slider removed; migrated into 0–3 subrating below */}
+
+        <div className="grid gap-1">
+          <label className="text-sm font-medium">Have you been diagnosed with sleep apnea?</label>
+          <div className="inline-flex overflow-hidden rounded-md border shadow-sm w-fit">
+            {['No','Yes'].map((label, idx) => {
+              const yes = Boolean(sleep?.sleep_apnea_diagnosed);
+              const isYes = idx === 1;
+              const active = (isYes && yes) || (!isYes && !yes);
+              return (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={()=> update('sleep_apnea_diagnosed', isYes)}
+                  aria-pressed={active}
+                  className={[
+                    'px-3 py-1.5 text-sm border-l first:border-l-0',
+                    active && isYes ? 'bg-sky-50 text-sky-700 border-sky-300' : active && !isYes ? 'bg-background text-muted-foreground border-muted-foreground/20' : 'bg-background hover:bg-accent border-transparent'
+                  ].join(' ')}
+                >{label}</button>
+              );
+            })}
           </div>
         </div>
 
         <div className="grid gap-1">
-          <div className="flex items-center justify-between">
-            <label className="text-sm font-medium">How rested do you feel on waking? (0–10)</label>
-            <div className="text-xs text-muted-foreground">{rested}</div>
+          <label className="text-sm font-medium">Do you use sleep aids?</label>
+          <div className="inline-flex overflow-hidden rounded-md border shadow-sm w-fit">
+            {['No','Yes'].map((label, idx) => {
+              const yes = Boolean(sleep?.sleep_aids_used);
+              const isYes = idx === 1;
+              const active = (isYes && yes) || (!isYes && !yes);
+              return (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={()=> {
+                    update('sleep_aids_used', isYes);
+                  }}
+                  aria-pressed={active}
+                  className={[
+                    'px-3 py-1.5 text-sm border-l first:border-l-0',
+                    active && isYes ? 'bg-sky-50 text-sky-700 border-sky-300' : active && !isYes ? 'bg-background text-muted-foreground border-muted-foreground/20' : 'bg-background hover:bg-accent border-transparent'
+                  ].join(' ')}
+                >{label}</button>
+              );
+            })}
           </div>
-          <Slider min={0} max={10} step={1} value={[rested]} onValueChange={(v)=>update('rested_on_waking_0to10', Math.max(0, Math.min(10, Math.round(v?.[0] ?? 0))))} />
+          <div className="text-xs text-muted-foreground">If Yes, your provider will follow up about type and dosage.</div>
+        </div>
+
+        <div className="grid gap-2">
+          <div>
+            <label className="text-sm font-medium">Sleep patterns (0–3)</label>
+            <div className="mt-0.5 flex items-center gap-3 text-[10px] text-muted-foreground">
+              <span>0 = never</span>
+              <span>1 = sometimes</span>
+              <span>2 = often</span>
+              <span>3 = always</span>
+            </div>
+          </div>
+          <div className="grid gap-2">
+            {subItems.map(it => {
+              const val = Number(sleep?.subratings?.[it.key] ?? 0);
+              return (
+                <div key={it.key} className="grid gap-1">
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm text-muted-foreground">{it.label}</div>
+                    <div className="text-xs text-muted-foreground">{val}</div>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {[0,1,2,3].map(n => (
+                      <button
+                        key={n}
+                        type="button"
+                        aria-pressed={val===n}
+                        onClick={()=> update(`subratings.${it.key}`, n)}
+                        className={[ 'h-7 w-7 rounded-full border text-xs grid place-items-center', val===n ? 'border-primary bg-primary/10 text-primary' : 'hover:bg-accent' ].join(' ')}
+                      >{n}</button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
 
-      <div className="grid gap-2">
-        <label className="text-sm font-medium">Do you experience any of these?</label>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          {flags.map(f => (
-            <label key={f.id} className="flex items-center gap-2 text-sm">
-              <Checkbox checked={!!(sleep?.flags?.[f.id])} onCheckedChange={(v)=> setFlag(f.id, v === true)} />
-              <span>{f.label}</span>
-            </label>
-          ))}
-        </div>
-      </div>
 
       {/* Derived metrics are computed for gating, not shown to clients */}
 

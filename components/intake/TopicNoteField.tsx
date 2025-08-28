@@ -8,7 +8,8 @@ export function TopicNoteField({
   onComplete,
   debug,
   onLiveChange,
-}: { topicId: string; initial: string; chips: string[]; onSave: (text: string) => void; onComplete: (text: string) => void; debug?: boolean; onLiveChange?: (text: string)=>void }) {
+  placeholder,
+}: { topicId: string; initial: string; chips: string[]; onSave: (text: string) => void; onComplete: (text: string) => void; debug?: boolean; onLiveChange?: (text: string)=>void; placeholder?: string }) {
   const [text, setText] = useState<string>(initial || '');
   const [showHint, setShowHint] = useState<boolean>(false);
   const liveRows = text.length > 120 || text.includes('\n') ? 3 : 1;
@@ -59,7 +60,7 @@ export function TopicNoteField({
       <textarea
         className="w-full min-h-[44px] resize-none rounded-md border p-3 text-base leading-6"
         rows={liveRows}
-        placeholder="A quick line in your own words…"
+        placeholder={placeholder || "A quick line in your own words…"}
         value={text}
         autoFocus
         ref={textareaRef}
