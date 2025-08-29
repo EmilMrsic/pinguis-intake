@@ -121,26 +121,36 @@ export default function PersonalityStep({ personality, update }: { personality: 
       arr[itemIndex] = value; // 1..5 scale
       const next = { ...prev, [catId]: arr };
       update('responses', next);
+      try {
+        const prevTexts: Record<string, string[]> = (personality?.texts || {});
+        const catTexts = Array.isArray(prevTexts[catId]) ? [...prevTexts[catId]] : [];
+        catTexts[itemIndex] = CATS.find(c=>c.id===catId)?.items?.[itemIndex]?.text || '';
+        const mergedTexts = { ...prevTexts, [catId]: catTexts };
+        update('texts', mergedTexts);
+      } catch {}
       return next;
     });
   }
 
   // compute scores (4..20) with reverse items flipped (6 - x)
   useEffect(() => {
-    try {
-      const scores: Record<string, number> = {};
-      for (const c of CATS) {
-        const vals = (local[c.id] || []).slice(0, c.items.length);
-        let sum = 0;
-        for (let i=0;i<c.items.length;i++) {
-          const raw = Number(vals[i] || 0);
-          const v = raw < 1 || raw > 5 ? 0 : (c.items[i].reverse ? (6 - raw) : raw);
-          sum += v;
+    const t = setTimeout(() => {
+      try {
+        const scores: Record<string, number> = {};
+        for (const c of CATS) {
+          const vals = (local[c.id] || []).slice(0, c.items.length);
+          let sum = 0;
+          for (let i=0;i<c.items.length;i++) {
+            const raw = Number(vals[i] || 0);
+            const v = raw < 1 || raw > 5 ? 0 : (c.items[i].reverse ? (6 - raw) : raw);
+            sum += v;
+          }
+          scores[c.id] = sum; // range 4..20 if all answered
         }
-        scores[c.id] = sum; // range 4..20 if all answered
-      }
-      update('scores', scores);
-    } catch {}
+        update('scores', scores);
+      } catch {}
+    }, 250);
+    return () => clearTimeout(t);
   }, [local, update]);
 
   const cat = CATS[Math.max(0, Math.min(catIdx, CATS.length-1))];
@@ -158,7 +168,7 @@ export default function PersonalityStep({ personality, update }: { personality: 
 
   return (
     <div className="grid gap-4">
-      <div className="text-base font-semibold">Psychosocial Analysis</div>
+      <div className="text-base font-semibold">Adaptive profile</div>
       <div className="grid gap-2">
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <div>{cat.title} — Item {itemIdx+1} of {cat.items.length}</div>

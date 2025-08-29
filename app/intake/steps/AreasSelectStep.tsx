@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 
 export function AreasSelectStep({ topics, selected, toggle, onAddCustom }: { topics: { id:string; label:string }[]; selected: string[]; toggle: (id: string)=>void; onAddCustom: (label: string)=>void }) {
   const [custom, setCustom] = React.useState<string>('');
+  const [showInfo, setShowInfo] = React.useState<boolean>(false);
   const [open, setOpen] = React.useState<Record<string, boolean>>({});
   const previews: Record<string, string[]> = React.useMemo(()=>({
     sleep: [
@@ -55,6 +56,18 @@ export function AreasSelectStep({ topics, selected, toggle, onAddCustom }: { top
       'Difficulty cutting back',
       'Impact on work, school, or relationships',
     ],
+    headaches: [
+      'Morning headaches',
+      'Tension band pressure',
+      'Migraine-like symptoms',
+      'Stress-triggered pain',
+    ],
+    chronic_pain: [
+      'Widespread body pain',
+      'Morning stiffness',
+      'Sleep disrupted by pain',
+      'Activity limiting',
+    ],
     learn: [
       'Struggles with reading comprehension',
       'Trouble following instructions',
@@ -70,6 +83,21 @@ export function AreasSelectStep({ topics, selected, toggle, onAddCustom }: { top
   }
   return (
     <div className="grid gap-4">
+      <div className="rounded-md border bg-accent/30 p-3">
+        <button
+          type="button"
+          className="text-xs font-medium underline"
+          onClick={()=>setShowInfo(s=>!s)}
+          aria-expanded={showInfo}
+        >
+          How does this work?
+        </button>
+        {showInfo && (
+          <div className="mt-2 text-xs text-muted-foreground">
+            Select one or more areas to focus on. On the next screen, for some topics we’ll show a few short 0–3 sub‑questions — you’ll need to rate each one. For sleep issues, we’ll ask about drifting off, early waking, feeling unrefreshed, long naps, and schedule variability.
+          </div>
+        )}
+      </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4" aria-label="Topics">
         {topics.map((t) => {
           const isSelected = selected.includes(t.id);

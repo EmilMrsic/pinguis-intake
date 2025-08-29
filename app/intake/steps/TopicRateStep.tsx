@@ -14,6 +14,9 @@ export function TopicRateStep({
   showSubRatings,
   subItems,
   onSetSubRating,
+  severityAfterSubratings,
+  showSeverity = true,
+  severityPromptOverride,
 }: {
   topicId?: string;
   topicLabel: string;
@@ -27,10 +30,16 @@ export function TopicRateStep({
   showSubRatings?: boolean;
   subItems?: { key: string; label: string; value?: number }[];
   onSetSubRating?: (key: string, val: number) => void;
+  severityAfterSubratings?: boolean;
+  showSeverity?: boolean;
+  severityPromptOverride?: string;
 }) {
-  return (
-    <div className="grid gap-3">
+  const severityBlock = showSeverity ? (
+    <div className="grid gap-2">
       <div className="text-base font-semibold">You chose {severity || '—'} for {topicLabel}</div>
+      {severityPromptOverride && (
+        <div className="text-sm text-muted-foreground">{severityPromptOverride}</div>
+      )}
       <div role="radiogroup" aria-label={`${topicLabel} severity`} className="flex items-center gap-3">
         {[1,2,3,4,5].map(n => {
           const sel = severity === n;
@@ -50,40 +59,57 @@ export function TopicRateStep({
         })}
         <span className="ml-2 text-sm text-muted-foreground">1 = mild · 5 = severe</span>
       </div>
-      {showSubRatings && Array.isArray(subItems) && subItems.length > 0 && (
-        <div className="mt-2 grid gap-3">
-          {subItems.map(it => (
-            <div key={it.key} className="grid gap-1">
-              <div className="flex items-center justify-between">
-                <div className="text-sm text-muted-foreground">{it.label}</div>
-                <div className="text-xs text-muted-foreground">{Math.round(it.value ?? 0)}</div>
-              </div>
-              <div className="flex items-center gap-2">
-                {[0,1,2,3].map(n => {
-                  const selected = (it.value ?? 0) === n;
-                  return (
-                    <button
-                      key={n}
-                      type="button"
-                      aria-pressed={selected}
-                      onClick={()=> onSetSubRating && onSetSubRating(it.key, n)}
-                      className={[
-                        'h-8 w-8 rounded-full border text-sm grid place-items-center',
-                        selected ? 'border-primary bg-primary/10 text-primary' : 'hover:bg-accent'
-                      ].join(' ')}
-                    >{n}</button>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-          <div className="flex items-center justify-between text-[11px] text-muted-foreground mt-1">
-            <span>0 = not present</span>
-            <span>1 = mild</span>
-            <span>2 = moderate</span>
-            <span>3 = severe</span>
+    </div>
+  ) : null;
+
+  const subBlock = (showSubRatings && Array.isArray(subItems) && subItems.length > 0) ? (
+    <div className="mt-2 grid gap-3">
+      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+        <span>0 = never</span>
+        <span>1 = sometimes</span>
+        <span>2 = often</span>
+        <span>3 = always</span>
+      </div>
+      {subItems.map(it => (
+        <div key={it.key} className="grid gap-1">
+          <div className="flex items-center justify-between">
+            <div className="text-sm text-muted-foreground">{it.label}</div>
+            <div className="text-xs text-muted-foreground">{typeof it.value === 'number' ? Math.round(it.value) : '—'}</div>
+          </div>
+          <div className="flex items-center gap-2">
+            {[0,1,2,3].map(n => {
+              const selected = (typeof it.value === 'number') && it.value === n;
+              return (
+                <button
+                  key={n}
+                  type="button"
+                  aria-pressed={selected}
+                  onClick={()=> onSetSubRating && onSetSubRating(it.key, n)}
+                  className={[
+                    'h-8 w-8 rounded-full border text-sm grid place-items-center',
+                    selected ? 'border-primary bg-primary/10 text-primary' : 'hover:bg-accent'
+                  ].join(' ')}
+                >{n}</button>
+              );
+            })}
           </div>
         </div>
+      ))}
+    </div>
+  ) : null;
+
+  return (
+    <div className="grid gap-3">
+      {severityAfterSubratings ? (
+        <>
+          {subBlock}
+          {severityBlock}
+        </>
+      ) : (
+        <>
+          {severityBlock}
+          {subBlock}
+        </>
       )}
       {severity >= 3 && (
         <TopicNoteField

@@ -26,7 +26,7 @@ function buildHeuristicRecap(section: string, inputs: any, name?: string) {
   const flags: string[] = [];
 
   switch(section) {
-    case 'metabolic': {
+    case 'bio': {
       const caf = inputs?.caffeine_simple;
       const ctx = inputs?.caffeine_context;
       const exFreq = inputs?.exercise_frequency;
@@ -116,7 +116,7 @@ function buildHeuristicRecap(section: string, inputs: any, name?: string) {
 function sectionTitle(section: string) {
   switch(section) {
     case 'sleep': return 'Sleep Summary';
-    case 'metabolic': return 'Metabolic Summary';
+    case 'bio': return 'Bio Assessment Summary';
     case 'daily': return 'Daily Habits Summary';
     case 'cec': return 'CEC Summary';
     case 'isi': return 'Insomnia Severity Index';

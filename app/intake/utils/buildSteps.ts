@@ -20,12 +20,11 @@ export function buildSteps(selectedTopicIds: string[], topics: { id:string; labe
     ...topicSteps,
     { id:'meds_intro', title:'Thanks — almost there', description:'Medications & supplements', type:'text', field:'meds_intro' },
     { id:'daily',       title:'Daily habits & health', type:'daily', field:'daily' },
-    { id:'personality', title:'Psychosocial Analysis', type:'personality', field:'personality' },
+    { id:'personality', title:'Adaptive profile', type:'personality', field:'adaptive' },
     { id:'sleep_intro', title:'Sleep context', description:'Why sleep matters for your map', type:'sleep_intro', field:'sleep_intro' },
     { id:'sleep_short', title:'Sleep habits', type:'sleep_short', field:'sleep' },
-    { id:'cec',         title:'CEC questionnaire', type:'cec', field:'cec' },
-    { id:'metabolic',   title:'Metabolic', type:'metabolic', field:'metabolic' },
-    { id:'isi',         title:'Insomnia Severity Index', type:'isi', field:'isi' },
+    { id:'cec',         title:'Psychosocial', type:'cec', field:'cec' },
+    
     { id:'review_prepare', title:'Getting things ready', type:'review_prepare', field:'review_prepare' },
     { id:'review',      title:'Review & submit', type:'review', field:'review' },
   ];

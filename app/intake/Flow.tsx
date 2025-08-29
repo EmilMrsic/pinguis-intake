@@ -35,6 +35,7 @@ import SleepShortStep from '@/app/intake/steps/SleepShortStep';
 import SleepIntroStep from '@/app/intake/steps/SleepIntroStep';
 import CECStep from '@/app/intake/steps/CECStep';
 import MetabolicStep from '@/app/intake/steps/MetabolicStep';
+import BioAssessmentStep from '@/app/intake/steps/BioAssessmentStep';
 import ISIStep from '@/app/intake/steps/ISIStep';
 import ReviewStep from '@/app/intake/steps/ReviewStep';
 import ReviewPrepareStep from '@/app/intake/steps/ReviewPrepareStep';
@@ -45,6 +46,8 @@ import { usePreparedRecaps, generateSectionRecap } from '@/app/intake/hooks/useR
 import AreasPrepStep from '@/app/intake/steps/AreasPrepStep';
 import MedsIntroStep from '@/app/intake/steps/MedsIntroStep';
 import PersonalityStep from '@/app/intake/steps/PersonalityStep';
+import { SUBRATING_CONFIG } from '@/lib/intake/subratings';
+import CECRemainderStep from '@/app/intake/steps/CECRemainderStep';
  
 
 export type Step = {
@@ -268,8 +271,22 @@ export default function Flow() {
         const filtered = next.tracker.candidates.filter((r: any) => !(typeof r?.field === 'string' && r.field.startsWith(`deepdive.${topicId}.`)));
         next.tracker = { ...(next.tracker||{}), candidates: filtered };
       }
+      // GAP must_include flag cleanup for headaches & chronic pain
+      if (topicId === 'headaches') {
+        try { if (next.gap && next.gap.must_include) delete next.gap.must_include.headaches; } catch {}
+      }
+      if (topicId === 'chronic_pain') {
+        try { if (next.gap && next.gap.must_include) delete next.gap.must_include.chronic_pain; } catch {}
+      }
     } else {
       selected.push(topicId);
+      // GAP must_include flag for headaches & chronic pain
+      if (topicId === 'headaches') {
+        try { setByPath(next, 'gap.must_include.headaches', true); } catch {}
+      }
+      if (topicId === 'chronic_pain') {
+        try { setByPath(next, 'gap.must_include.chronic_pain', true); } catch {}
+      }
     }
     next.areas = { ...(next.areas ?? {}), selected, severity: { ...(next.areas?.severity ?? {}) } };
     const enq = selected.filter(t => hasDeepDive(t) && (next.areas.severity?.[t] ?? 0) >= 3);
@@ -300,6 +317,13 @@ export default function Flow() {
         const filtered = next.tracker.candidates.filter((r: any) => !(typeof r?.field === 'string' && r.field.startsWith(`deepdive.${topicId}.`)));
         next.tracker = { ...(next.tracker||{}), candidates: filtered };
       }
+    }
+    // Ensure GAP must_include flag for headaches & chronic pain when rated
+    if (topicId === 'headaches' && (severity?.headaches ?? 0) >= 1) {
+      try { setByPath(next, 'gap.must_include.headaches', true); } catch {}
+    }
+    if (topicId === 'chronic_pain' && (severity?.chronic_pain ?? 0) >= 1) {
+      try { setByPath(next, 'gap.must_include.chronic_pain', true); } catch {}
     }
     setPayload(next);
     autosave(next, { immediate: true, silent: true });
@@ -416,6 +440,19 @@ export default function Flow() {
 
   useIsiGate({ currentType: current?.type, payload, nextStep });
 
+  // Skip Sleep intro if sleep topic already handled in topic stage
+  useEffect(() => {
+    try {
+      if (current?.id === 'sleep_intro') {
+        const selected: string[] = payload?.areas?.selected || [];
+        if (selected.includes('sleep')) {
+          nextStep();
+        }
+      }
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.id, payload?.areas?.selected]);
+
   // Keep topic note local state in sync when topic changes
   useEffect(() => {
     if (current?.type !== 'topic_rate') return;
@@ -524,8 +561,8 @@ export default function Flow() {
           {current.id === 'personality' && (
             <div className="grid gap-4">
               <PersonalityStep
-                personality={payload?.personality || {}}
-                update={(rel, val)=>{ const next=structuredClone(payload); setByPath(next, `personality.${rel}`, val); setPayload(next); autosave(next,{silent:true}); }}
+                personality={payload?.adaptive || {}}
+                update={(rel, val)=>{ const next=structuredClone(payload); setByPath(next, `adaptive.${rel}`, val); setPayload(next); autosave(next,{ immediate:true, silent:true }); }}
               />
               <div className="flex items-center gap-3 pt-2">
                 <Button variant="outline" onClick={prevStep}>Back</Button>
@@ -536,6 +573,9 @@ export default function Flow() {
           )}
 
           {current.type === 'sleep_short' && (()=>{
+            // If the user already selected the sleep topic, they answered habits during sleep topic; skip this step
+            const selectedTopics: string[] = payload?.areas?.selected || [];
+            if (selectedTopics.includes('sleep')) return null;
             const sleep = payload?.sleep || {};
             const preview = computeSdsPreview(sleep);
             return (
@@ -560,40 +600,26 @@ export default function Flow() {
             />
             );})()}
 
-          {current.type === 'cec' && (
-            <CECStep
-              values={payload?.cec || {}}
-              update={(id, v)=>{ const next=structuredClone(payload); setByPath(next, `cec.${id}`, v); setPayload(next); autosave(next,{silent:true}); }}
-              onComplete={()=> nextStep()}
-            />
-          )}
+          {current.type === 'cec' && (()=>{
+            // Determine remaining topics not self-rated earlier (no severity set in areas.severity)
+            const selectedIds: string[] = payload?.areas?.selected || [];
+            const severities: Record<string, number> = payload?.areas?.severity || {};
+            const allTopicIds = topics.map(t => t.id);
+            const remainder = allTopicIds.filter(id => !selectedIds.includes(id) && id !== 'headaches' && id !== 'chronic_pain');
+            return (
+              <CECRemainderStep
+                remaining={remainder}
+                topics={topics}
+                payload={payload}
+                setPayload={setPayload}
+                autosave={autosave}
+                onComplete={()=> nextStep()}
+              />
+            );
+          })()}
 
           {current.type === 'metabolic' && (
-            <MetabolicStep
-              metabolic={payload?.metabolic || {}}
-              firstName={profile?.first_name}
-              update={(rel,val)=>{ 
-                const next=structuredClone(payload);
-                if (rel === 'caffeine_clear') {
-                  try {
-                    if (next.metabolic && typeof next.metabolic === 'object') {
-                      delete next.metabolic.caffeine_text;
-                      delete next.metabolic.caffeine_followup;
-                      delete next.metabolic.caffeine_choice;
-                      delete next.metabolic.caffeine_choice_multi;
-                      delete next.metabolic.daily_caffeine_amount;
-                      delete next.metabolic.daily_caffeine_mg;
-                      delete next.metabolic.caffeine_simple;
-                      delete next.metabolic.caffeine_context;
-                    }
-                  } catch {}
-                } else {
-                  setByPath(next, `metabolic.${rel}`, val);
-                }
-                setPayload(next);
-                autosave(next,{silent:true});
-              }}
-            />
+            <BioAssessmentStep payload={payload} setPayload={setPayload} autosave={autosave} />
           )}
 
           {current.type === 'isi' && (
@@ -650,7 +676,25 @@ export default function Flow() {
               <div className="text-sm text-muted-foreground">Value: {Math.round(getByPath(payload, current.field) ?? 0)}</div>
             </div>
           )}
-          {current.id !== 'sleep_intro' && current.id !== 'review_prepare' && current.id !== 'meds_intro' && current.type !== 'review' && (
+          {current.id !== 'sleep_intro' && current.id !== 'review_prepare' && current.id !== 'meds_intro' && current.type !== 'review' && (()=>{
+            // Require subratings for configured topics before enabling Next on topic_rate screens
+            let nextDisabledOverride = false;
+            if (current.type === 'topic_rate') {
+              try {
+                const topicId = current?.meta?.topicId as string;
+                const items = SUBRATING_CONFIG[topicId] || [];
+                if (items.length > 0) {
+                  const allFilled = items.every(it => {
+                    const v = getByPath(payload, `topic_subratings.${topicId}.${it.key}`);
+                    return v === 0 || v === 1 || v === 2 || v === 3;
+                  });
+                  // For topics with subratings, require severity chosen after subratings
+                  const sev = payload?.areas?.severity?.[topicId];
+                  nextDisabledOverride = !(allFilled && (sev === 1 || sev === 2 || sev === 3 || sev === 4 || sev === 5));
+                }
+              } catch {}
+            }
+            return (
           <FooterNav
             onBack={() => { prevStep(); }}
             onNext={() => {
@@ -669,12 +713,12 @@ export default function Flow() {
               nextStep();
             }}
             backDisabled={stepIdx===0}
-            nextDisabled={false}
+            nextDisabled={nextDisabledOverride}
             saving={saving}
             toast={toast}
             nextLabel={'Next'}
           />
-          )}
+            );})()}
         </CardContent>
       </Card>
       </Glow>

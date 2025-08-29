@@ -16,7 +16,7 @@ export default function ReviewPrepareStep({
   async function buildAll() {
     setBusy(true);
     try {
-      const sections = ['daily','sleep','cec','metabolic','isi'];
+      const sections = ['daily','sleep','cec','bio','isi'];
       const recaps: Record<string, any> = { ...(payload?.recaps||{}) };
       for (const section of sections) {
         const inputs = (payload||{})[section] || {};
@@ -36,8 +36,8 @@ export default function ReviewPrepareStep({
     <div className="grid gap-4">
       <div className="text-sm text-muted-foreground">Before we show your review, we’ll quickly polish your summaries so nothing is missing.</div>
       <div className="flex items-center gap-3">
-        <Button variant="outline" onClick={onBack} disabled={busy}>Back</Button>
-        <Button onClick={buildAll} disabled={busy}>{busy ? 'Building summaries…' : 'Build my summaries'}</Button>
+        <Button variant="outline" type="button" onClick={()=>{ try { onBack(); } catch {} }}>Back</Button>
+        <Button type="button" onClick={buildAll} disabled={busy}>{busy ? 'Building summaries…' : 'Build my summaries'}</Button>
       </div>
     </div>
   );

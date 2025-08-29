@@ -22,7 +22,10 @@ export function useAutosavePayload(initial: Record<string, any>) {
 
   const autosave = useCallback((next: Record<string, any>, opts?: { silent?: boolean; immediate?: boolean }) => {
     const doSave = async (snapshotIn: Record<string, any>) => {
-      const snapshot = { ...(snapshotIn as any) } as any;
+      // Merge with latest in-memory payload to avoid overwriting newer fields with stale snapshots
+      const latest = (payloadRef.current || {}) as any;
+      const merged = { ...(latest as any), ...(snapshotIn as any) } as any;
+      const snapshot = merged;
       if (!snapshot.intakeId) {
         snapshot.intakeId = generateIntakeIdFrom(snapshot);
         setPayload((prev) => prev?.intakeId ? prev : ({ ...prev, intakeId: snapshot.intakeId }));
@@ -33,11 +36,19 @@ export function useAutosavePayload(initial: Record<string, any>) {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ practiceId: '01hpracticeuliddevdevdevdev', clientId: '01hclientuliddevdevdevdevdev', intakeId: snapshot?.intakeId, payload: snapshot })
         });
-        if (res.ok && !(opts?.silent)) {
+        if (!res.ok) {
+          if (!(opts?.silent)) setToast('Save failed');
+          return;
+        }
+        if (!(opts?.silent)) {
           setToast('Saved ✓');
           setTimeout(()=>setToast(''), 1200);
         }
-      } finally { setSaving(false); }
+      } catch (_e) {
+        if (!(opts?.silent)) setToast('Save failed');
+      } finally {
+        setSaving(false);
+      }
     };
 
     if (opts?.immediate) {
