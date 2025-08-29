@@ -26,6 +26,8 @@ export default function PatientDetailPage({ params }: { params: { intakeId: stri
   const [cecDraft, setCecDraft] = useState<Record<string, number>>({});
   const [draft, setDraft] = useState<any>(null);
   const [saving, setSaving] = useState<boolean>(false);
+  const [gapAnswers, setGapAnswers] = useState<Record<string, any>>({});
+  const [gapSaving, setGapSaving] = useState<boolean>(false);
 
   useEffect(() => {
     const auth = getAuth();
@@ -37,6 +39,7 @@ export default function PatientDetailPage({ params }: { params: { intakeId: stri
         if (!res.ok || data.ok === false) throw new Error(data?.error || 'Load failed');
         setItem(data.item);
         setDraft(structuredClone(data.item?.payload || {}));
+        try { setGapAnswers({ ...(data.item?.gap_report?.answers || {}) }); } catch {}
         try { setCecDraft({ ...(data.item?.payload?.cec || {}) }); } catch {}
       } catch (e:any) { setError(e?.message || 'Load failed'); }
     });
@@ -612,8 +615,84 @@ export default function PatientDetailPage({ params }: { params: { intakeId: stri
         </Card>
       )}
 
-      {tab as any === 'gap' && item?.gap_report?.json?.gapReport?.sections && (
-        <GapReportForm intakeId={item.intake_id} initial={{ sections: item.gap_report.json.gapReport.sections, answers: item.gap_report.answers }} />
+      {tab as any === 'gap' && (
+        <div className="space-y-6">
+          {/* Rendered report */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Gap Report — Provider</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {item?.gap_report?.render?.mode === 'html' && (
+                <div dangerouslySetInnerHTML={{ __html: String(item?.gap_report?.render?.content || '') }} />
+              )}
+              {item?.gap_report?.render?.mode === 'markdown' && (
+                <pre className="whitespace-pre-wrap text-sm">{String(item?.gap_report?.render?.content || '')}</pre>
+              )}
+              {!item?.gap_report?.render && (
+                <p className="text-sm text-muted-foreground">No report found. Click “Gap Report” to generate.</p>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Questionnaire */}
+          {Array.isArray(item?.gap_report?.writeback?.gap?.questionnaire) && (
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle>Targeted Gap Questionnaire</CardTitle>
+                <div className="flex items-center gap-2">
+                  {gapSaving && <span className="text-sm text-muted-foreground">Saving…</span>}
+                  <Button size="sm" onClick={async ()=>{
+                    try {
+                      setGapSaving(true);
+                      const auth = getAuth();
+                      const u = auth.currentUser!;
+                      const res = await fetch('/api/provider/gap-report/save', { method:'POST', headers:{ 'Content-Type':'application/json', Authorization: `Bearer ${await u.getIdToken()}` }, body: JSON.stringify({ intakeId: item.intake_id, answers: gapAnswers }) });
+                      const data = await res.json();
+                      if (!res.ok || data.ok === false) throw new Error(data?.error || 'Save failed');
+                      setItem((prev:any)=> ({ ...prev, gap_report: { ...(prev?.gap_report||{}), answers: { ...gapAnswers }, updated_at: data.updated_at } }));
+                    } catch (e:any) { setError(e?.message || 'Save failed'); }
+                    finally { setGapSaving(false); }
+                  }}>Save</Button>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {item.gap_report.writeback.gap.questionnaire.map((q: any) => (
+                  <div key={q.id} className="rounded border p-3">
+                    <div className="text-sm font-medium">Q: {q.patient_question} {q.scale ? <span className="text-xs text-muted-foreground">({q.scale})</span> : null}</div>
+                    <div className="text-xs text-slate-600 mb-2">Provider note: {q.provider_note}</div>
+                    <div>
+                      {(() => {
+                        const val = gapAnswers[q.id] ?? '';
+                        const type = String(q.expected_answer_type || 'text');
+                        if (type === 'scale') {
+                          // Parse scale like "0–5" or "0–3"
+                          const m = String(q.scale||'0–5').match(/(\d+)\D+(\d+)/);
+                          const min = m ? Number(m[1]) : 0; const max = m ? Number(m[2]) : 5;
+                          const opts = Array.from({ length: (max-min+1) }, (_,i)=>min+i);
+                          return (
+                            <select className="border rounded px-2 py-1" value={String(val)} onChange={(e)=> setGapAnswers(prev=>({ ...prev, [q.id]: Number(e.target.value) }))}>
+                              <option value="">Select…</option>
+                              {opts.map(n=> <option key={n} value={n}>{n}</option>)}
+                            </select>
+                          );
+                        }
+                        if (type === 'number') {
+                          return <input className="border rounded px-2 py-1" type="number" value={String(val)} onChange={(e)=> setGapAnswers(prev=>({ ...prev, [q.id]: Number(e.target.value) }))} />;
+                        }
+                        if (type === 'multi') {
+                          return <input className="border rounded px-2 py-1 w-full" placeholder="Comma-separated" value={Array.isArray(val)? val.join(', '): String(val)} onChange={(e)=> setGapAnswers(prev=>({ ...prev, [q.id]: e.target.value.split(',').map(s=>s.trim()).filter(Boolean) }))} />;
+                        }
+                        // text or choice fallback
+                        return <input className="border rounded px-2 py-1 w-full" value={String(val)} onChange={(e)=> setGapAnswers(prev=>({ ...prev, [q.id]: e.target.value }))} />;
+                      })()}
+                    </div>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          )}
+        </div>
       )}
 
       {tab==='intake' && (
